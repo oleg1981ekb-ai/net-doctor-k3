@@ -12,6 +12,8 @@ app = typer.Typer(
     help="Service CLI for managing a 3-node AmneziaWG cascade.",
 )
 
+config_app = typer.Typer(help="Configuration commands.")
+
 
 @app.command(name="version")
 def version() -> None:
@@ -25,7 +27,7 @@ def check() -> None:
     typer.echo("check: not implemented yet")
 
 
-@app.command(name="config")
+@config_app.command(name="validate")
 def config_validate(
     config_path: str = typer.Option(
         "cascade.yaml",
@@ -46,6 +48,9 @@ def config_validate(
     except (ValidationError, ValueError) as exc:
         typer.echo(f"ERROR: {exc}", err=True)
         raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+
+app.add_typer(config_app, name="config")
 
 
 def main() -> None:
