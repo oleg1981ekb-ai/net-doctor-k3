@@ -1,0 +1,2 @@
+[console_scripts]
+awg-ctl = awg_cascade_ctl.cli:main

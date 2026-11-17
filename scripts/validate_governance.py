@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Fail-closed governance validator for AI Infrastructure Standard v1.2."""
 
-from datetime import date
-from pathlib import Path
 import re
 import sys
+from datetime import date
+from pathlib import Path
 
 try:
     import yaml
