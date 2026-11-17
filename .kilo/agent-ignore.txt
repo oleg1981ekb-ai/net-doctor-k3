@@ -1,0 +1,13 @@
+.env*
+.git/
+.ssh/
+.aws/
+.kube/
+.npmrc
+.pypirc
+*.pem
+*.key
+id_*
+.kilo/memory.json
+qdrant_storage/
+.playwright-mcp/

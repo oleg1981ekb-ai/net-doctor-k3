@@ -1,0 +1,7 @@
+# Mandatory Governance Protection (Stage 1)
+/.kilo/ {{ tech_lead_handle }} {{ security_owner_handle }}
+/AGENTS.md {{ tech_lead_handle }} {{ security_owner_handle }}
+/kilo.jsonc {{ tech_lead_handle }} {{ security_owner_handle }}
+/.env.example {{ tech_lead_handle }} {{ security_owner_handle }}
+/.github/CODEOWNERS {{ tech_lead_handle }} {{ security_owner_handle }}
+/.github/workflows/ai-governance.yml {{ tech_lead_handle }} {{ security_owner_handle }}

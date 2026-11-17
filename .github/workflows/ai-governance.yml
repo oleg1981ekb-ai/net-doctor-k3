@@ -1,0 +1,41 @@
+name: AI Infrastructure Governance Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1"
+
+jobs:
+  governance-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validator dependencies
+        run: pip install pyyaml
+
+      - name: Run Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check unresolved Copier placeholders
+        run: |
+          if grep -rn "{{" .kilo/ AGENTS.md kilo.jsonc .github/CODEOWNERS; then
+            echo "[FAIL] Unresolved template placeholders found!"
+            exit 1
+          fi
+
+      - name: Run Fail-Closed Governance Validator
+        run: python3 scripts/validate_governance.py

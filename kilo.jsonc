@@ -1,0 +1,53 @@
+{
+  "$schema": "https://kilo.ai",
+  "model": "{{ primary_model }}",
+  "small_model": "{{ primary_model }}",
+  "subagent_model": "{{ primary_model }}",
+  "reasoning_display": "preview",
+  "terminal_command_display": "collapsed",
+  "code_edit_display": "collapsed",
+  "mcp_tool_display": "collapsed",
+  "permission": {
+    "bash": {
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git branch *": "allow",
+      "pytest *": "allow",
+      "ruff *": "allow",
+      "python3 -m py_compile *": "allow",
+      "make ai-smoke": "allow"
+    },
+    "read": {
+      "*": "allow",
+      ".env*": "deny",
+      "*.pem": "deny",
+      "*.key": "deny"
+    }
+  },
+  "mcp": {
+    "time": {
+      "type": "local",
+      "command": ["npx", "-y", "@theo.foobar/mcp-time@0.1.0"],
+      "enabled": true
+    },
+    "memory": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory@0.6.2"],
+      "environment": {
+        "MEMORY_FILE_PATH": ".kilo/memory.json"
+      },
+      "enabled": true
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@0.0.20"],
+      "enabled": false
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://context7.com",
+      "enabled": true
+    }
+  }
+}
