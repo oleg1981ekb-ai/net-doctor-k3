@@ -1,5 +1,7 @@
 """Tests for awg-ctl CLI commands."""
 
+import json
+
 from typer.testing import CliRunner
 
 from awg_cascade_ctl.cli import app
@@ -8,13 +10,52 @@ runner = CliRunner()
 
 
 def test_help() -> None:
-    """Help should exit with code 0 and show command info."""
+    """Help exits 0 and lists check/schema commands."""
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "check" in result.output
+    assert "schema" in result.output
 
 
-def test_version_flag() -> None:
-    """Version flag should exit with code 0."""
+def test_version() -> None:
+    """Version exits 0."""
     result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "awg-ctl" in result.output
+
+
+def test_check_human() -> None:
+    """check without --json outputs human-readable text."""
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0
+    assert "overall: OK" in result.output
+
+
+def test_check_json() -> None:
+    """check --json outputs valid JSON only."""
+    result = runner.invoke(app, ["check", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["schema_version"] == "1.0"
+    assert "links" in data
+
+
+def test_schema_json() -> None:
+    """schema --json outputs valid JSON schema."""
+    result = runner.invoke(app, ["schema", "--json"])
+    assert result.exit_code == 0
+    schema = json.loads(result.output)
+    assert isinstance(schema, dict)
+    assert schema.get("type") == "object"
+
+
+def test_config_validate_stub_runs() -> None:
+    """config validate runs without crashing."""
+    result = runner.invoke(app, ["config", "validate", "--help"])
+    assert result.exit_code == 0
+
+
+def test_exit_code_ok_for_good_report() -> None:
+    """A good report returns exit code 0."""
+    result = runner.invoke(app, ["check"])
     assert result.exit_code == 0

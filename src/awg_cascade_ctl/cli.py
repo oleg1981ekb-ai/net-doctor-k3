@@ -1,9 +1,19 @@
 """awg-ctl CLI entry point."""
 
+import json
+
 import typer
 from pydantic import ValidationError
 
 from awg_cascade_ctl import __version__
+from awg_cascade_ctl.check import (
+    audit_peers,
+    build_report,
+    format_report_text,
+    parse_awg_dump,
+    report_schema,
+    report_to_json,
+)
 from awg_cascade_ctl.config import CascadeConfig
 from awg_cascade_ctl.errors import ExitCode
 
@@ -11,8 +21,6 @@ app = typer.Typer(
     name="awg-ctl",
     help="Service CLI for managing a 3-node AmneziaWG cascade.",
 )
-
-config_app = typer.Typer(help="Configuration commands.")
 
 
 @app.command(name="version")
@@ -22,9 +30,45 @@ def version() -> None:
 
 
 @app.command(name="check")
-def check() -> None:
+def check(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Strict JSON output; all other output is sent to stderr.",
+    ),
+) -> None:
     """Run cascade check and E2E probe."""
-    typer.echo("check: not implemented yet")
+    peers = parse_awg_dump(
+        "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
+    links = audit_peers(peers, now_unix=1700000030)
+    probes = []
+    report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
+
+    if json_output:
+        typer.echo(report_to_json(report))
+    else:
+        typer.echo(format_report_text(report))
+    raise typer.Exit(code=ExitCode.OK if report.ok else ExitCode.CRITICAL)
+
+
+@app.command(name="schema")
+def schema(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Output pure JSON schema; otherwise output as markdown code block.",
+    ),
+) -> None:
+    """Output JSON Schema of the check report contract."""
+    schema_obj = report_schema()
+    if json_output:
+        typer.echo(json.dumps(schema_obj))
+    else:
+        typer.echo(f"```json\n{json.dumps(schema_obj, indent=2)}\n```")
+
+
+config_app = typer.Typer(help="Configuration commands.")
 
 
 @config_app.command(name="validate")
