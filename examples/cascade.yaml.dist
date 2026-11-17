@@ -1,0 +1,73 @@
+# Example configuration for awg-ctl cascade
+# Copy this file to cascade.yaml and fill in real values.
+# Do NOT commit cascade.yaml with real credentials to version control.
+
+# Server hosts (must be reachable via SSH with key-based auth)
+servers:
+  in:
+    host: "vpn-in.example.com"
+    port: 22
+    username: "root"
+  mid:
+    host: "vpn-mid.example.com"
+    port: 22
+    username: "root"
+  out:
+    host: "vpn-out.example.com"
+    port: 22
+    username: "root"
+
+# AmneziaWG network parameters
+network:
+  # Client subnet (awg-in:awg0)
+  client_subnet: 10.9.9.0/24
+  # Link between awg-in:awg1 <-> awg-mid:awg0
+  link1_subnet: 10.10.1.0/30
+  # Link between awg-mid:awg1 <-> awg-out:awg0
+  link2_subnet: 10.10.2.0/30
+  # MTU for inter-server interfaces
+  mtu: 1360
+  # MSS clamping
+  mss_clamp: true
+  # PersistentKeepalive for inter-server links
+  persistent_keepalive: 25
+  # DNS resolvers for clients (routed via table 100 to NL)
+  dns:
+    - 1.1.1.1
+    - 9.9.9.9
+  # URL for E2E IP checker
+  ip_checker_url: "https://api.ipify.org"
+
+# sysctl settings applied on all nodes
+sysctl:
+  net.ipv4.ip_forward: 1
+  net.ipv4.conf.all.rp_filter: 2
+  net.netfilter.nf_conntrack_max: 65536
+  net.ipv6.conf.all.disable_ipv6: 1
+
+# UDP port assignments
+ports:
+  # Port on awg-in:awg0 for clients (10000-59999)
+  client_in: 51820
+  # Port for awg-in:awg1 <-> awg-mid:awg0
+  link1: 51821
+  # Port for awg-mid:awg1 <-> awg-out:awg0
+  link2: 51822
+  # Optional: port for mobile clients (443/udp)
+  mobile: 443
+
+# Paths to helper scripts on the server
+scripts:
+  manage_amneziawg: "/root/awg/manage_amneziawg.sh"
+  routing: "/root/awg/awg-routing.sh"
+  backup_prefixes: "/root/awg/ru.zone"
+
+# Timeouts in seconds
+timeouts:
+  ssh_connect: 10
+  ssh_command: 30
+  deploy: 600
+  check: 60
+
+# Log level (debug/info/warning/error)
+log_level: info
