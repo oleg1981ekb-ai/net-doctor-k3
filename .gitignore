@@ -11,3 +11,4 @@ __pycache__/
 .kilo/memory.json
 qdrant_storage/
 .playwright-mcp/
+*.egg-info/
