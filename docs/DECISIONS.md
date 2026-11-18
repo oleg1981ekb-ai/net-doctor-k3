@@ -63,3 +63,30 @@ Defer `deploy` to Phase 2 / Post-MVP. In v1 the `deploy` command is a stub that 
 - v1 CLI supports exactly 4 commands.
 - `deploy` is tracked as Phase 2 work.
 - Stub prevents accidental invocation.
+
+---
+
+## ADR-003: Narrow MVP to Read-Only `check` command only
+
+- **Status:** Accepted
+- **Date:** 2026-11-18
+- **Scope:** awg-ctl v1.0 MVP
+
+### Context
+
+The v1 MVP initially included four CLI commands: `check`, `swap-exit`, `test-failover`, `clients`. `deploy` was already deferred to Phase 2 (ADR-002). The remaining mutating commands (`swap-exit`, `test-failover`, `clients`) change cascade state or trigger failover, which increases risk before Read-Only diagnostics are validated.
+
+### Decision
+
+Narrow the v1 MVP scope strictly to the single Read-Only command: `check`. All mutating commands are deferred to Phase 2 / Post-MVP.
+
+### Alternatives considered
+
+- Keep the original 4-command MVP: rejected — mutating operations require additional safety guarantees (locking, idempotency, rollback) before production use.
+- Implement `check` plus one mutating command: rejected — partial support lacks full safety coverage.
+
+### Consequences
+
+- v1 CLI provides read-only diagnostics only.
+- Mutating commands are tracked as Phase 2 work.
+- Stubs (exit 64) prevent accidental invocation of Phase 2 commands.

@@ -84,6 +84,58 @@ def deploy(
     raise typer.Exit(code=ExitCode.USAGE_ERROR)
 
 
+@app.command(name="swap-exit")
+def swap_exit(
+    new_host: str = typer.Option(
+        ...,
+        "--new-host",
+        help="[Phase 2] New exit node host.",
+    ),
+) -> None:
+    """Swap exit node (Phase 2)."""
+    typer.echo(
+        "ERROR: swap-exit is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
+        err=True,
+    )
+    raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+
+@app.command(name="test-failover")
+def test_failover(
+    target: str = typer.Option(
+        ...,
+        "--target",
+        help="[Phase 2] Target node: mid or out.",
+    ),
+    wait_healthcheck: bool = typer.Option(
+        False,
+        "--wait-healthcheck",
+        help="[Phase 2] Wait for healthcheck after failover.",
+    ),
+) -> None:
+    """Test failover (Phase 2)."""
+    typer.echo(
+        "ERROR: test-failover is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
+        err=True,
+    )
+    raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+
+@app.command(name="clients")
+def clients(
+    action: str = typer.Argument(
+        ...,
+        help="[Phase 2] Action: add|remove|list.",
+    ),
+) -> None:
+    """Manage clients (Phase 2)."""
+    typer.echo(
+        "ERROR: clients is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
+        err=True,
+    )
+    raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+
 config_app = typer.Typer(help="Configuration commands.")
 
 

@@ -59,3 +59,18 @@ def test_exit_code_ok_for_good_report() -> None:
     """A good report returns exit code 0."""
     result = runner.invoke(app, ["check"])
     assert result.exit_code == 0
+
+
+def test_phase2_stubs_exit_64() -> None:
+    """Phase 2 command stubs exit with code 64 and report Phase 2."""
+    commands = [
+        ["deploy"],
+        ["swap-exit", "--new-host", "vpn-out2.example.com"],
+        ["test-failover", "--target", "mid"],
+        ["clients", "list"],
+    ]
+    for cmd_args in commands:
+        result = runner.invoke(app, cmd_args)
+        assert result.exit_code == 64
+        assert "Phase 2" in result.output
+        assert "Out of Scope for v1" in result.output
