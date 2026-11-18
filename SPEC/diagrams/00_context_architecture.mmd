@@ -1,0 +1,26 @@
+%%{init: {'theme':'dark', 'themeVariables': {'mainBackground':'#121212', 'primaryColor':'#ffffff', 'secondaryColor':'#e0e0e0', 'tertiaryColor':'#e0e0e0'}}}%%
+flowchart LR
+    Clients["Клиенты AWG<br/>10.9.9.0/24"]
+    Admin["Admin<br/>awg-ctl (CLI)"]
+    AwgIn["awg-in<br/>entry node<br/>table 100"]
+    AwgMid["awg-mid<br/>transit node<br/>table 200 fail-closed"]
+    AwgOut["awg-out<br/>exit node<br/>NL IP"]
+
+    Clients --> AwgIn
+    AwgIn -->|Линк 1: 10.10.1.0/30<br/>awg1 -> awg0| AwgMid
+    AwgMid -->|Линк 2: 10.10.2.0/30<br/>awg1 -> awg0| AwgOut
+
+    AwgIn -.->|unmarked traffic<br/>Russian prefixes<br/>via RF IP| RF["Прямой выход IP РФ (ru.zone)"]
+
+    Admin -.->|OOB ProxyJump| AwgIn
+    AwgIn -.->|OOB ProxyJump| AwgMid
+    AwgMid -.->|OOB ProxyJump| AwgOut
+
+    subgraph Ext ["External dependencies"]
+        Manage["manage_amneziawg.sh<br/>>=5.21.0"]
+        Checker["settings.ip_checker_url"]
+    end
+
+    AwgIn --> Manage
+    AwgIn -->|E2E probes| Checker
+    AwgOut -->|E2E probes| Checker

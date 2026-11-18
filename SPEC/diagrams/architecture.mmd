@@ -1,0 +1,33 @@
+%% Specification Architecture for {{ project_name }}
+
+graph TD
+    subgraph SPEC[SPEC Layer]
+        S1[spec.yaml]
+        S2[schemas/spec.schema.json]
+        S3[diagrams/architecture.mmd]
+        S4[adr/001-initial-setup.md]
+    end
+    
+    subgraph DOCS[Documentation]
+        D1[docs/ARCHITECTURE.md]
+        D2[AGENTS.md]
+        D3[kilo.jsonc]
+    end
+    
+    subgraph CODE[Generated Code]
+        C1[src/{{ package_name }}/]
+        C2[tests/]
+        C3[pyproject.toml]
+    end
+    
+    S1 -->|validates against| S2
+    S1 -->|generates| C1
+    S1 -->|generates| C3
+    S1 -->|informs| D1
+    D1 -->|governs| C1
+    D2 -->|governs| C1
+    D3 -->|configures| C1
+    
+    style SPEC fill:#e1f5e1
+    style DOCS fill:#e1e5f5
+    style CODE fill:#f5e1e1
