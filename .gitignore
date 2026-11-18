@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+cascade.yaml
+cascade.yaml.*
 .venv/
 venv/
 __pycache__/
