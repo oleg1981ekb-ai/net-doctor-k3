@@ -1,0 +1,35 @@
+flowchart TD
+    Start[Start awg-ctl check] --> SSH_AWG_IN[SSH awg-in: manage_amneziawg.sh check --json]
+    SSH_AWG_IN -->|SSH or parse error| CRIT[CRITICAL 1]
+    SSH_AWG_IN -->|OK| AUDIT_IN[awg-in: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
+    SSH_AWG_IN -->|OK| AUDIT_MID[awg-mid: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
+    SSH_AWG_IN -->|OK| AUDIT_OUT[awg-out: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
+    AUDIT_IN -->|keepalive/handshake fail| CRIT
+    AUDIT_MID -->|keepalive/handshake fail| CRIT
+    AUDIT_OUT -->|keepalive/handshake fail| CRIT
+    AUDIT_IN -->|OK| AUDIT_MID
+    AUDIT_MID -->|OK| AUDIT_OUT
+    AUDIT_OUT -->|OK| AWG_MID[awg-mid: audit transit protection<br/>table 200 unreachable<br/>FORWARD DROP first position]
+    AWG_MID -->|table 200/FORWARD DROP violation| CRIT
+    AWG_MID -->|OK| E2E_AW_OUT[awg-out: curl -4s --max-time 10<br/>settings.ip_checker_url]
+    E2E_AW_OUT --> E2E_AW_IN[awg-in: curl -4s --max-time 10<br/>settings.ip_checker_url via table 100]
+    E2E_AW_IN -->|timeout or IP mismatch| CRIT
+    E2E_AW_IN -->|match| RU_ZONE[awg-in: unmarked traffic ru.zone<br/>should exit via RF IP]
+    RU_ZONE -->|leak NL IP| CRIT
+    RU_ZONE -->|OK| WARN_LOCAL[Local backup ru.zone used]
+    WARN_LOCAL -->|yes| WARN[WARNING 3]
+    WARN_LOCAL -->|no| OK_WARN[No warning]
+    WARN --> AGG[Aggregation: 1 > 3 > 0]
+    OK_WARN --> AGG
+    CRIT --> AGG
+    AGG --> Output
+    Output -->|json flag| JSON_OUT[stdout: valid JSON<br/>stderr: logs/errors]
+    Output -->|no flag| TABLE_OUT[stdout: Rich table]
+    JSON_OUT --> Exit[Exit with final code]
+    TABLE_OUT --> Exit
+
+    style CRIT fill:#f44336,stroke:#c62828,color:#fff
+    style WARN fill:#ff9800,stroke:#e65100,color:#fff
+    style OK_WARN fill:#4caf50,stroke:#2e7d32,color:#fff
+    style JSON_OUT fill:#2196f3,stroke:#1565c0,color:#fff
+    style TABLE_OUT fill:#2196f3,stroke:#1565c0,color:#fff
