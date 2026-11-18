@@ -35,3 +35,31 @@ Do not add `questionary` to the stack for v1.0. Keep `Typer` (argument parsing) 
 - All interactions remain non-interactive and scriptable.
 - Menus (if ever needed) are deferred to a future revision.
 - `questionary` must not be added to `pyproject.toml` dependencies without a new decision record.
+
+---
+
+## ADR-002: Defer `deploy` command to Phase 2 / Post-MVP
+
+- **Status:** Accepted
+- **Date:** 2026-11-18
+- **Scope:** awg-ctl v1.0 MVP
+
+### Context
+
+The v1 MVP includes exactly 4 CLI commands: `check`, `swap-exit`, `test-failover`, `clients`. The `deploy` command (with `--dry-run` and `pre_deploy` backups) is deferred to Phase 2.
+
+### Decision
+
+Defer `deploy` to Phase 2 / Post-MVP. In v1 the `deploy` command is a stub that exits with code `64` and reports `Phase 2: Not in MVP`.
+
+### Alternatives considered
+
+- Implement `deploy` in v1: rejected — expands scope beyond v1 MVP constraints.
+- Omit the stub entirely: rejected — would risk silent misuse.
+- Implement `deploy` without `--dry-run`: rejected — violates safety requirements.
+
+### Consequences
+
+- v1 CLI supports exactly 4 commands.
+- `deploy` is tracked as Phase 2 work.
+- Stub prevents accidental invocation.
