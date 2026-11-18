@@ -119,9 +119,33 @@ def test_menu_phase2_stub_exits_64(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "clients      \u2014 Manage clients (Phase 2 stub)"
+    mock_select.return_value.ask.return_value = "clients      — Manage clients (Phase 2 stub)"
     monkeypatch.setattr(questionary, "select", mock_select)
 
     result = runner.invoke(app, ["menu"])
     assert result.exit_code == 64
     assert "Phase 2" in result.output
+
+
+def test_check_json_non_tty_valid_no_ansi(monkeypatch) -> None:
+    """check --json in non-TTY (CI) emits valid JSON without ANSI codes."""
+    result = runner.invoke(app, ["check", "--json"])
+    assert result.exit_code == 0
+    assert "\033[" not in result.output
+    data = json.loads(result.output)
+    assert data["schema"] == "awg-ctl/check/v1"
+    assert data["ok"] is True
+
+
+def test_check_stdout_empty_stderr_on_success(monkeypatch) -> None:
+    """check success writes nothing to stderr."""
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0
+    assert result.stderr == ""
+
+
+def test_check_color_never_no_ansi(monkeypatch) -> None:
+    """check with --color never emits ANSI codes."""
+    result = runner.invoke(app, ["check", "--color", "never"])
+    assert result.exit_code == 0
+    assert "\033[" not in result.output

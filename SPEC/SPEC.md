@@ -28,7 +28,9 @@ SPEC/
 ## 5. MVP Command Scope
 The v1 MVP CLI supports exactly 1 command:
 - `check` — read-only cascade diagnostics and E2E probe
-  - flags: `--json` (strict JSON on stdout, logs/errors to stderr), `--verbose`
+  - flags: `--json` (strict JSON on stdout), `--verbose`
+  - flag: `--color auto|always|never`; respects `NO_COLOR` env var
+  - schema: `awg-ctl/check/v1`; `status`: pass | fail | warning
   - priority matrix: `1 (CRITICAL) > 3 (WARNING) > 0 (OK)`
   - E2E probes and fail-closed transit audit are included
 
@@ -62,26 +64,12 @@ The interactive `menu` command is a Phase 2 UI layer — it does not expand the 
 - **Behavior:** Presents a list of choices (`check`, `clients`, `swap-exit`, `test-failover`). Selecting `check` runs the check command and exits with code 0 (or 1 if report is not OK). Selecting any Phase 2 stub exits with code 64 and reports "Phase 2".
 - **Options:** `--interactive` — launch interactive menu from non-Typer entry point.
 
-## 6. Phase 2 / Post-MVP (Out of Scope for v1)
-### deploy
-- **Description:** Deploy cascade configuration to all nodes.
-- **Options:** `--dry-run` — show what would be deployed without applying changes.
-- **Pre-deploy backups:** enabled (`pre_deploy` backups before deployment).
-- **Exit:** If invoked on v1 CLI, command is a stub that exits with code 64 (`ExitCode.USAGE_ERROR`) and reports `Phase 2: Not in MVP`.
-
-### swap-exit
-- **Description:** Swap exit node.
-- **Options:** `--new-host` — new exit node host.
-- **Exit:** Stub, exit code 64.
-
-### test-failover
-- **Description:** Test failover.
-- **Options:** `--target mid|out`, `--wait-healthcheck`.
-- **Exit:** Stub, exit code 64.
-
-### clients
-- **Description:** Client management (`add|remove|list`).
-- **Exit:** Stub, exit code 64.
+### check
+- **Description:** Read-only cascade check and E2E probe.
+- **Flags:** `--json` (strict JSON on stdout), `--color` (auto|always|never, supports NO_COLOR).
+- **Schema:** `awg-ctl/check/v1` (with `generated_at`, `cascade`, `links`, `e2e_probes`, `ok`, `status`).
+- **Status:** `pass`, `fail`, `warning`.
+- **Exit:** 0 (pass), 1 (critical/fail), 3 (warning).
 
 ## 7. Workflow
 1. Author/update `SPEC/spec.yaml`

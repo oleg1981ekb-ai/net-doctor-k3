@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from typing import Literal
 
 import typer
 from pydantic import ValidationError
@@ -25,6 +26,35 @@ try:
 except ImportError:
     QUESTIONARY_AVAILABLE = False
 
+# ANSI color constants (safe when NO_COLOR or non-TTY)
+_COLORS_AVAILABLE = {
+    "green": "\033[32m",
+    "red": "\033[31m",
+    "yellow": "\033[33m",
+    "reset": "\033[0m",
+}
+
+
+def _use_color(value: Literal["auto", "always", "never"] = "auto") -> bool:
+    """Decide whether to emit ANSI colours."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if value == "never":
+        return False
+    if value == "always":
+        return True
+    # TERM=dumb disables colours
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    return sys.stdout.isatty()
+
+
+def _paint(text: str, color_name: str, use_color: bool) -> str:
+    if not use_color:
+        return text
+    return f"{_COLORS_AVAILABLE[color_name]}{text}{_COLORS_AVAILABLE['reset']}"
+
+
 app = typer.Typer(
     name="awg-ctl",
     help="Service CLI for managing a 3-node AmneziaWG cascade.",
@@ -39,6 +69,31 @@ def _is_interactive_mode() -> bool:
     return sys.stdin.isatty() and os.environ.get("CI", "").lower() not in ("true", "1", "yes")
 
 
+def _run_check(json_output: bool, color: Literal["auto", "always", "never"] = "auto") -> int:
+    """Run check and return exit code. Used by both CLI menu and `check` command."""
+    peers = parse_awg_dump(
+        "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
+    links = audit_peers(peers, now_unix=1700000030)
+    probes = []
+    report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
+
+    use_color = _use_color(color)
+
+    if json_output:
+        typer.echo(report_to_json(report))
+    else:
+        typer.echo(format_report_text(report, use_color=use_color))
+
+    # Map status -> exit code
+    if report.status == "pass":
+        return ExitCode.OK.value
+    elif report.status == "warning":
+        return ExitCode.WARNING.value
+    else:
+        return ExitCode.CRITICAL.value
+
+
 @app.command(name="version")
 def version() -> None:
     """Show the awg-ctl version."""
@@ -50,22 +105,17 @@ def check(
     json_output: bool = typer.Option(
         False,
         "--json",
-        help="Strict JSON output; all other output is sent to stderr.",
+        help="Strict JSON output; all other output is sent to stdout.",
+    ),
+    color: Literal["auto", "always", "never"] = typer.Option(
+        "auto",
+        "--color",
+        help="Force colour mode: auto (default), always, or never.",
     ),
 ) -> None:
     """Run cascade check and E2E probe."""
-    peers = parse_awg_dump(
-        "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
-    )
-    links = audit_peers(peers, now_unix=1700000030)
-    probes = []
-    report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
-
-    if json_output:
-        typer.echo(report_to_json(report))
-    else:
-        typer.echo(format_report_text(report))
-    raise typer.Exit(code=ExitCode.OK if report.ok else ExitCode.CRITICAL)
+    exit_code = _run_check(json_output=json_output, color=color)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command(name="schema")
@@ -195,20 +245,8 @@ def menu() -> None:
     cmd = selected.split()[0]
 
     if cmd == "check":
-        from awg_cascade_ctl.check import (
-            audit_peers,
-            build_report,
-            format_report_text,
-            parse_awg_dump,
-        )
-        peers = parse_awg_dump(
-            "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
-        )
-        links = audit_peers(peers, now_unix=1700000030)
-        probes = []
-        report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
-        typer.echo(format_report_text(report))
-        raise typer.Exit(code=ExitCode.OK if report.ok else ExitCode.CRITICAL)
+        exit_code = _run_check(json_output=False)
+        raise typer.Exit(code=exit_code)
 
     if cmd in ("clients", "swap-exit", "test-failover", "deploy"):
         typer.echo(
@@ -255,14 +293,21 @@ def main() -> None:
     if "--interactive" in sys.argv:
         sys.argv.remove("--interactive")
         if _is_interactive_mode() and QUESTIONARY_AVAILABLE:
-            menu()
+            # When called from __main__ we must catch typer.Exit manually,
+            # because Typer's standalone_mode handler is not in the stack.
+            try:
+                menu()
+            except typer.Exit as exc:
+                sys.exit(exc.exit_code)
+            except KeyboardInterrupt:
+                sys.exit(130)
             return
         else:
             typer.echo(
                 "ERROR: --interactive requires a TTY and questionary.",
                 err=True,
             )
-            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+            sys.exit(ExitCode.USAGE_ERROR)
     app()
 
 
