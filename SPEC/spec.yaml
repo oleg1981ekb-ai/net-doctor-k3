@@ -20,6 +20,15 @@ phase_2:
     priority_matrix: "1 (CRITICAL) > 3 (WARNING) > 0 (OK)"
     e2e_probes: true
     fail_closed_audit: true
+  menu:
+    description: "Interactive TTY menu for awg-ctl"
+    options:
+      --interactive: "Launch interactive menu (requires TTY and questionary)."
+    items:
+      - check
+      - clients
+      - swap-exit
+      - test-failover
   deploy:
     description: "Deploy cascade configuration to all nodes"
     options:

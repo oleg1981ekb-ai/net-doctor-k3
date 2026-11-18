@@ -19,3 +19,5 @@ See `SPEC/diagrams/02_check_flow.mmd` for the TD flowchart of `awg-ctl check` co
 MVP (v1) supports exactly one **Read-Only** command: `check` (incl. `--json`, `--verbose`, priority matrix `1 > 3 > 0`, E2E probes, fail-closed audit).
 The mutating commands `clients`, `swap-exit`, `test-failover` are deferred to **Phase 2 / Post-MVP**. The `deploy` command (incl. `--dry-run` and `pre_deploy` backups) is also deferred to Phase 2 / Post-MVP.
 Phase 2 stubs exit with code 64 (`ExitCode.USAGE_ERROR`) and report the deferral.
+
+**Phase 2 UI Layer:** The `menu` command provides an interactive TTY-based menu (via `questionary`) with items `check`, `clients`, `swap-exit`, `test-failover`. Selecting `check` runs the check command and exits with its code (0 for OK, 1 for CRITICAL). Selecting any Phase 2 stub exits with code 64 and reports "Phase 2". The `--interactive` flag launches the menu from the CLI entry point. Requires TTY and questionary; otherwise exits with code 64.

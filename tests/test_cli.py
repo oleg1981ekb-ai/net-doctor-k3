@@ -1,7 +1,9 @@
 """Tests for awg-ctl CLI commands."""
 
 import json
+from unittest import mock
 
+import questionary
 from typer.testing import CliRunner
 
 from awg_cascade_ctl.cli import app
@@ -74,3 +76,52 @@ def test_phase2_stubs_exit_64() -> None:
         assert result.exit_code == 64
         assert "Phase 2" in result.output
         assert "Out of Scope for v1" in result.output
+
+
+def test_menu_no_tty_exits_64(monkeypatch) -> None:
+    """Menu exits with code 64 when stdin is not a TTY."""
+    monkeypatch.setattr(
+        "awg_cascade_ctl.cli._is_interactive_mode",
+        lambda: False,
+    )
+    result = runner.invoke(app, ["menu"])
+    assert result.exit_code == 64
+    assert "TTY" in result.output
+
+
+def test_menu_tty_runs_check(monkeypatch) -> None:
+    """Menu with TTY and mocked questionary select runs check."""
+    monkeypatch.setattr(
+        "awg_cascade_ctl.cli._is_interactive_mode",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE",
+        True,
+    )
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.return_value = "check        \u2014 Run cascade check and E2E probe"
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    result = runner.invoke(app, ["menu"])
+    assert result.exit_code == 0
+    assert "overall: OK" in result.output
+
+
+def test_menu_phase2_stub_exits_64(monkeypatch) -> None:
+    """Menu selecting a Phase 2 command exits with code 64."""
+    monkeypatch.setattr(
+        "awg_cascade_ctl.cli._is_interactive_mode",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE",
+        True,
+    )
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.return_value = "clients      \u2014 Manage clients (Phase 2 stub)"
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    result = runner.invoke(app, ["menu"])
+    assert result.exit_code == 64
+    assert "Phase 2" in result.output

@@ -6,7 +6,7 @@ Format: Context → Decision → Alternatives → Consequences.
 
 ## ADR-001: Defer `questionary`-based interactive menu
 
-- **Status:** Accepted (deferred)
+- **Status:** Reversed (interactive menu reintroduced for MVP phase 2 scope)
 - **Date:** 2026-11-17
 - **Scope:** out of scope for v1.0 (`TZ-awg-ctl-v4.0-final`)
 
@@ -35,6 +35,9 @@ Do not add `questionary` to the stack for v1.0. Keep `Typer` (argument parsing) 
 - All interactions remain non-interactive and scriptable.
 - Menus (if ever needed) are deferred to a future revision.
 - `questionary` must not be added to `pyproject.toml` dependencies without a new decision record.
+
+### Reversal (2026-11-18)
+The interactive menu scope was revisited for MVP phase planning. The `menu` command / `--interactive` flag was implemented as an **opt-in** flow, isolated from the read-only `check` JSON contract, with TTY/CI guards. ADR-001 is therefore reversed; the underlying guardrails (no JSON pollution, non-interactive fallback, minimal scope) remain.
 
 ---
 
