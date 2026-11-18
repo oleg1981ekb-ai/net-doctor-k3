@@ -1,0 +1,10 @@
+project_name: "{{ project_name }}"
+description: "{{ project_description }}"
+
+components:
+  - name: "{{ package_name }}"
+    type: api
+    version: "0.1.0"
+    authors:
+      - "{{ tech_lead_handle }}"
+    requirements: {}
