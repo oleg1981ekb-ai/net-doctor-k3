@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 HANDSHAKE_MAX_AGE_SEC = 180
 REQUIRED_KEEPALIVE = 25
+
+SCHEMA_VERSION = "awg-ctl/check/v1"
+
+# ANSI color constants (used only when use_color=True)
+_ANSI = {
+    "green": "\033[32m",
+    "red": "\033[31m",
+    "yellow": "\033[33m",
+    "reset": "\033[0m",
+}
+
+
+def _paint(text: str, color: str, use_color: bool) -> str:
+    if not use_color:
+        return text
+    return f"{_ANSI[color]}{text}{_ANSI['reset']}"
 
 
 class LinkAudit(BaseModel):
@@ -38,15 +55,21 @@ class E2EProbe(BaseModel):
 
 
 class CheckReport(BaseModel):
-    """Machine-readable report for `awg-ctl check --json` (schema_version 1.0)."""
+    """Machine-readable report for `awg-ctl check --json` (schema awg-ctl/check/v1)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
+    schema_id: Literal["awg-ctl/check/v1"] = Field(
+        default="awg-ctl/check/v1",
+        alias="schema",
+    )
     schema_version: Literal["1.0"] = "1.0"
+    generated_at: str = ""
     cascade: str
     links: list[LinkAudit]
     e2e_probes: list[E2EProbe]
     ok: bool = False
+    status: Literal["pass", "fail", "warning"] = "pass"
 
 
 @dataclass(frozen=True)
@@ -123,18 +146,26 @@ def build_report(
 ) -> CheckReport:
     """Assemble a CheckReport and compute the overall status."""
     ok = all(link.ok for link in links) and all(probe.ok for probe in e2e_probes)
+    status: Literal["pass", "fail", "warning"] = "pass"
+    if not ok:
+        status = "fail"
+    elif not links and not e2e_probes:
+        status = "pass"
     return CheckReport(
+        schema_id="awg-ctl/check/v1",
         schema_version="1.0",
+        generated_at=datetime.now(UTC).isoformat(),
         cascade=cascade,
         links=links,
         e2e_probes=e2e_probes,
         ok=ok,
+        status=status,
     )
 
 
 def report_to_json(report: CheckReport) -> str:
     """Serialize a report to a single-line JSON string (strict mode)."""
-    return json.dumps(report.model_dump(mode="json"))
+    return json.dumps(report.model_dump(mode="json", by_alias=True))
 
 
 def report_schema() -> dict:
@@ -142,25 +173,43 @@ def report_schema() -> dict:
     return CheckReport.model_json_schema()
 
 
-def format_report_text(report: CheckReport) -> str:
-    """Format a check report as human-readable text."""
-    lines = [f"awg-ctl check - {report.cascade}"]
-    lines.append(f"schema_version: {report.schema_version}")
-    lines.append(f"overall: {'OK' if report.ok else 'FAILED'}")
+def format_report_text(report: CheckReport, use_color: bool = False) -> str:
+    """Format a check report as human-readable text (summary-first)."""
+    lines: list[str] = [f"awg-ctl check - {report.cascade}"]
+    status_text = {"pass": "PASS", "fail": "FAIL", "warning": "WARN"}[report.status]
+    status_color = {"pass": "green", "fail": "red", "warning": "yellow"}[report.status]
+    lines.append(f"status: {_paint(status_text, status_color, use_color)} ({report.status})")
+    overall_text = "OK" if report.ok else "FAILED"
+    overall_color = "green" if report.ok else "red"
+    lines.append(f"overall: {_paint(overall_text, overall_color, use_color)}")
+    lines.append(f"generated_at: {report.generated_at}")
     lines.append("")
-    lines.append("Links:")
-    for link in report.links:
-        lines.append(
-            f"  {link.interface} -> {link.peer_endpoint}: "
-            f"keepalive={'OK' if link.keepalive_ok else 'MISSING'}, "
-            f"handshake={'fresh' if link.handshake_fresh else 'STALE'}, "
-            f"ok={'yes' if link.ok else 'no'}"
-        )
+
+    if report.links:
+        lines.append("Links:")
+        ok_count = sum(1 for link in report.links if link.ok)
+        lines.append(f"  {ok_count}/{len(report.links)} ok")
+        for link in report.links:
+            lines.append(
+                f"  {link.interface} -> {link.peer_endpoint}: "
+                f"keepalive={'OK' if link.keepalive_ok else 'MISSING'}, "
+                f"handshake={'fresh' if link.handshake_fresh else 'STALE'}, "
+                f"ok={'yes' if link.ok else 'no'}"
+            )
+    else:
+        lines.append("Links: 0 links")
+
     lines.append("")
     lines.append("E2E probes:")
-    for probe in report.e2e_probes:
-        lines.append(
-            f"  {probe.source} ({probe.url}): {probe.ipv4 or 'n/a'}, "
-            f"ok={'yes' if probe.ok else 'no'}"
-        )
+    if report.e2e_probes:
+        ok_probes = sum(1 for probe in report.e2e_probes if probe.ok)
+        lines.append(f"  {ok_probes}/{len(report.e2e_probes)} ok")
+        for probe in report.e2e_probes:
+            lines.append(
+                f"  {probe.source} ({probe.url}): {probe.ipv4 or 'n/a'}, "
+                f"ok={'yes' if probe.ok else 'no'}"
+            )
+    else:
+        lines.append("  none")
+
     return "\n".join(lines)
