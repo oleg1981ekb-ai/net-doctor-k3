@@ -173,9 +173,44 @@ awg-ctl config validate -c cascade.yaml
 # Output: OK: cascade.yaml is valid
 ```
 
-## 6. Example Complete Config
+## 7. Check & Menu Command Integration
 
-See `examples/cascade.yaml.dist` for the full template. Copy and fill in real values before production use.
+Both `awg-ctl check` and `awg-ctl menu` support loading real data from `cascade.yaml` via SSH, with fallback to demo data:
+
+```bash
+# Using SSH from cascade.yaml (production)
+awg-ctl check --config cascade.yaml
+awg-ctl menu --config cascade.yaml
+
+# Using local dump file (CI/test, no SSH needed)
+awg-ctl check --dump-file /path/to/dump.txt
+```
+
+**Data source priority:**
+1. `--dump-file PATH` — parse local AWG dump file (highest, overrides config)
+2. `--config PATH` — load cascade.yaml, SSH to `servers.in`, run `awg show all dump`
+3. Fallback — hardcoded demo data (backward compatible)
+
+**E2E probe (requires `--config`):**
+When `--config` is provided, `check` reads `network.ip_checker_url` from the config and runs a `curl` GET to verify the external IP visible through the cascade. The result is included in the report as an `E2EProbe` (source: `awg-in`). If probe fails, it's recorded as `ok: false` without aborting the check.
+
+**Example output with real data:**
+```bash
+$ awg-ctl check --config cascade.yaml
+awg-ctl check - cascade-alpha
+status: PASS (pass)
+overall: OK
+generated_at: 2024-01-15T10:30:00+00:00
+
+Links:
+  2/2 ok
+  awg0 -> 10.10.1.1:51821: keepalive=OK, handshake=fresh, ok=yes
+  awg1 -> 10.10.2.1:51822: keepalive=OK, handshake=fresh, ok=yes
+
+E2E probes:
+  1/1 ok
+  awg-in (https://api.ipify.org): 203.0.113.42, ok=yes
+```
 
 ## 7. Related Documents
 

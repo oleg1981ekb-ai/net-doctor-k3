@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +29,83 @@ def _paint(text: str, color: str, use_color: bool) -> str:
     if not use_color:
         return text
     return f"{_ANSI[color]}{text}{_ANSI['reset']}"
+
+
+def _demo_dump() -> str:
+    """Return the hardcoded demo AWG dump (used when no real source is available)."""
+    return "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+
+
+def load_real_dump(
+    config_path: str | Path | None = None,
+    dump_file: str | Path | None = None,
+) -> list[RawPeer]:
+    """Load AWG peer data from a real source.
+
+    Priority:
+    1. `dump_file` — local dump file (used for tests/CI).
+    2. `config_path` — cascade.yaml → SSH to `servers.in` to fetch dump.
+    3. Fallback — hardcoded demo data (backward compatible).
+    """
+    if dump_file:
+        text = Path(dump_file).read_text(encoding="utf-8")
+        return parse_awg_dump(text)
+    if config_path:
+        from awg_cascade_ctl.config import CascadeConfig
+        from awg_cascade_ctl.ssh import SSHTransport
+
+        cfg = CascadeConfig.load(config_path)
+        server = cfg.servers["in"]
+        transport = SSHTransport(
+            host=server.host,
+            port=server.port,
+            user=server.username,
+            connect_timeout=cfg.timeouts.ssh_connect,
+            command_timeout=cfg.timeouts.ssh_command,
+        )
+        try:
+            transport.connect()
+            return transport.run_awg_dump()
+        finally:
+            transport.close()
+    return parse_awg_dump(_demo_dump())
+
+
+def load_e2e_probes(
+    config_path: str | Path | None = None,
+) -> list[E2EProbe]:
+    """Run E2E IP probe from config's `ip_checker_url` via curl.
+
+    Returns a list with one E2EProbe (source: awg-in) if probe succeeds,
+    or an empty list if config is missing or probe fails.
+    """
+    if not config_path:
+        return []
+    from awg_cascade_ctl.config import CascadeConfig
+
+    cfg = CascadeConfig.load(config_path)
+    url = cfg.network.ip_checker_url
+    try:
+        result = subprocess.run(
+            ["curl", "-sS", "--max-time", "5", url],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        ipv4 = result.stdout.strip()
+        return [
+            E2EProbe(
+                source="awg-in",
+                url=url,
+                ipv4=ipv4,
+                ok=bool(ipv4),
+            )
+        ]
+    except (subprocess.TimeoutExpired, OSError):
+        return []
 
 
 class LinkAudit(BaseModel):
@@ -70,6 +149,7 @@ class CheckReport(BaseModel):
     e2e_probes: list[E2EProbe]
     ok: bool = False
     status: Literal["pass", "fail", "warning"] = "pass"
+    source: Literal["demo", "dump_file", "ssh"] = "demo"
 
 
 @dataclass(frozen=True)
@@ -143,6 +223,7 @@ def build_report(
     cascade: str,
     links: list[LinkAudit],
     e2e_probes: list[E2EProbe],
+    source: Literal["demo", "dump_file", "ssh"] = "demo",
 ) -> CheckReport:
     """Assemble a CheckReport and compute the overall status."""
     ok = all(link.ok for link in links) and all(probe.ok for probe in e2e_probes)
@@ -160,6 +241,7 @@ def build_report(
         e2e_probes=e2e_probes,
         ok=ok,
         status=status,
+        source=source,
     )
 
 
@@ -182,6 +264,7 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
     overall_text = "OK" if report.ok else "FAILED"
     overall_color = "green" if report.ok else "red"
     lines.append(f"overall: {_paint(overall_text, overall_color, use_color)}")
+    lines.append(f"source: {report.source}")
     lines.append(f"generated_at: {report.generated_at}")
     lines.append("")
 
