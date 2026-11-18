@@ -16,5 +16,6 @@ See `SPEC/diagrams/00_context_architecture.mmd` for the high-level flow of admin
 See `SPEC/diagrams/02_check_flow.mmd` for the TD flowchart of `awg-ctl check` covering SSH metrics, transit audit, E2E probes, ru.zone validation, warning aggregation, priority matrix, and output formatting.
 
 ## 5. Command Scope
-MVP (v1) supports: `check`, `swap-exit`, `test-failover`, `clients`.
-The `deploy` command (incl. `--dry-run` and `pre_deploy` backups) is deferred to **Phase 2 / Post-MVP** and is not part of the v1 release.
+MVP (v1) supports exactly one **Read-Only** command: `check` (incl. `--json`, `--verbose`, priority matrix `1 > 3 > 0`, E2E probes, fail-closed audit).
+The mutating commands `clients`, `swap-exit`, `test-failover` are deferred to **Phase 2 / Post-MVP**. The `deploy` command (incl. `--dry-run` and `pre_deploy` backups) is also deferred to Phase 2 / Post-MVP.
+Phase 2 stubs exit with code 64 (`ExitCode.USAGE_ERROR`) and report the deferral.

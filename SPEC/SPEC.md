@@ -20,17 +20,19 @@ SPEC/
 │   ├── 00_context_architecture.mmd  # C4 Context diagram
 │   └── 02_check_flow.mmd            # Check command flow TD
 └── adr/                  # Architectural Decision Records
-    └── ADR-0001-initial-setup.md
+    ├── ADR-0001-initial-setup.md
+    ├── ADR-002-defer-deploy-phase2.md
+    └── ADR-003-mvp-read-only-check-only.md
 ```
 
 ## 5. MVP Command Scope
-The v1 MVP CLI supports exactly 4 commands:
-- `check` — cascade check and E2E probe (`--json` strict output)
-- `swap-exit` — swap exit node (`--new-host`)
-- `test-failover` — failover test (`--target mid|out`, `--wait-healthcheck`)
-- `clients` — client management (`add|remove|list`)
+The v1 MVP CLI supports exactly 1 command:
+- `check` — read-only cascade diagnostics and E2E probe
+  - flags: `--json` (strict JSON on stdout, logs/errors to stderr), `--verbose`
+  - priority matrix: `1 (CRITICAL) > 3 (WARNING) > 0 (OK)`
+  - E2E probes and fail-closed transit audit are included
 
-`deploy` is **out of scope for v1** and is deferred to Phase 2 / Post-MVP.
+`clients`, `swap-exit`, `test-failover`, and `deploy` are **out of scope for v1** and are deferred to Phase 2 / Post-MVP.
 
 ## 6. Phase 2 / Post-MVP (Out of Scope for v1)
 ### deploy
@@ -38,6 +40,20 @@ The v1 MVP CLI supports exactly 4 commands:
 - **Options:** `--dry-run` — show what would be deployed without applying changes.
 - **Pre-deploy backups:** enabled (`pre_deploy` backups before deployment).
 - **Exit:** If invoked on v1 CLI, command is a stub that exits with code 64 (`ExitCode.USAGE_ERROR`) and reports `Phase 2: Not in MVP`.
+
+### swap-exit
+- **Description:** Swap exit node.
+- **Options:** `--new-host` — new exit node host.
+- **Exit:** Stub, exit code 64.
+
+### test-failover
+- **Description:** Test failover.
+- **Options:** `--target mid|out`, `--wait-healthcheck`.
+- **Exit:** Stub, exit code 64.
+
+### clients
+- **Description:** Client management (`add|remove|list`).
+- **Exit:** Stub, exit code 64.
 
 ## 7. Workflow
 1. Author/update `SPEC/spec.yaml`
