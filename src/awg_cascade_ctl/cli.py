@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import sys
 from pathlib import Path
 from typing import Literal
@@ -71,6 +72,127 @@ def _is_interactive_mode() -> bool:
     return sys.stdin.isatty() and os.environ.get("CI", "").lower() not in ("true", "1", "yes")
 
 
+def _wait_for_key_or_timeout(seconds: float) -> bool:
+    """Return True if a key is pressed on stdin within `seconds`, False on timeout.
+
+    Uses cbreak mode (termios + tty.setcbreak: non-canonical, echo off) so a
+    single keypress is detected immediately without waiting for Enter. Safe on
+    non-TTY stdin: returns False immediately without blocking. Falls back to
+    plain select() when termios/tty are unavailable (e.g. Windows).
+    """
+    if not sys.stdin.isatty():
+        return False
+    try:
+        import termios
+        import tty
+    except ImportError:
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], seconds)
+        except (OSError, ValueError):
+            return False
+        return bool(ready)
+    try:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+    except (termios.error, OSError, ValueError):
+        return False
+    try:
+        tty.setcbreak(fd)
+        ready, _, _ = select.select([sys.stdin], [], [], seconds)
+        if not ready:
+            return False
+        termios.tcflush(fd, termios.TCIFLUSH)
+        return True
+    except (OSError, ValueError):
+        return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _source_selection_menu() -> tuple[str | None, str | None]:
+    """Open interactive source-selection menu.
+
+    Returns (config_path, dump_file) chosen by user.
+    On ESC/Ctrl+C/EOF or empty selection -> (None, None) (demo fallback).
+    """
+    if not QUESTIONARY_AVAILABLE:
+        return (None, None)
+    try:
+        answer = questionary.select(
+            "Источник данных:",
+            choices=[
+                questionary.Choice(
+                    title="Demo (тестовые данные) — встроенные: awg0, handshake=1700000000",
+                    value="demo",
+                ),
+                questionary.Choice(
+                    title="Dump file (локальный файл) — ввести путь к дампу (например ./dump.txt)",
+                    value="dump_file",
+                ),
+                questionary.Choice(
+                    title="SSH (через cascade.yaml) — ввести путь к конфигу (например ./cascade.yaml) -> SSH к servers.in",
+                    value="ssh",
+                ),
+            ],
+            use_indicator=True,
+        ).ask()
+    except (KeyboardInterrupt, EOFError):
+        return (None, None)
+
+    if answer is None:
+        return (None, None)
+
+    if answer == "demo":
+        return (None, None)
+
+    if answer == "dump_file":
+        try:
+            path = questionary.text(
+                "Путь к файла дампа:",
+                default="./dump.txt",
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            return (None, None)
+        if not path:
+            return (None, None)
+        return (None, path)
+
+    if answer == "ssh":
+        try:
+            path = questionary.text(
+                "Путь к cascade.yaml:",
+                default="./cascade.yaml",
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            return (None, None)
+        if not path:
+            return (None, None)
+        return (path, None)
+
+    return (None, None)
+
+
+def _resolve_check_source(
+    config_path: str | None,
+    dump_file: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve the check data source.
+
+    Explicit --config/--dump-file is used as-is. Otherwise, in interactive mode,
+    print a 3-second banner and wait for a keypress; on keypress open the
+    source-selection menu, otherwise fall back to demo data. Non-interactive
+    returns inputs unchanged (demo).
+    """
+    if config_path is not None or dump_file is not None:
+        return (config_path, dump_file)
+    if not _is_interactive_mode():
+        return (None, None)
+    typer.echo("Источник: demo (тест) | 3с до меню... Нажмите любую клавишу для выбора.")
+    if _wait_for_key_or_timeout(3.0):
+        return _source_selection_menu()
+    return (None, None)
+
+
 def _run_check(
     json_output: bool,
     color: Literal["auto", "always", "never"] = "auto",
@@ -85,10 +207,29 @@ def _run_check(
         config_path: path to cascade.yaml to load real config and SSH dump.
         dump_file: path to local dump file (overrides config if both given).
     """
-    peers = load_real_dump(config_path=config_path, dump_file=dump_file)
+    # Determine data source provenance
+    if dump_file:
+        source = "dump_file"
+    elif config_path:
+        source = "ssh"
+    else:
+        source = "demo"
+
+    try:
+        peers = load_real_dump(config_path=config_path, dump_file=dump_file)
+    except FileNotFoundError as exc:
+        typer.echo(f"ERROR: config file not found: {exc}", err=True)
+        raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+
     links = audit_peers(peers, now_unix=1700000030)
     probes = load_e2e_probes(config_path=config_path)
-    report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
+
+    report = build_report(
+        cascade="cascade-alpha",
+        links=links,
+        e2e_probes=probes,
+        source=source,
+    )
 
     use_color = _use_color(color)
 
@@ -137,6 +278,7 @@ def check(
     ),
 ) -> None:
     """Run cascade check and E2E probe."""
+    config_path, dump_file = _resolve_check_source(config_path, dump_file)
     exit_code = _run_check(
         json_output=json_output,
         color=color,
@@ -280,6 +422,7 @@ def menu(
     cmd = selected.split()[0]
 
     if cmd == "check":
+        config_path, _dump_file = _resolve_check_source(config_path, None)
         exit_code = _run_check(json_output=False, config_path=config_path)
         raise typer.Exit(code=exit_code)
 
@@ -331,7 +474,7 @@ def main() -> None:
             # When called from __main__ we must catch typer.Exit manually,
             # because Typer's standalone_mode handler is not in the stack.
             try:
-                menu()
+                menu(config_path=None)
             except typer.Exit as exc:
                 sys.exit(exc.exit_code)
             except KeyboardInterrupt:

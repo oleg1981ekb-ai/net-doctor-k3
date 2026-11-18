@@ -149,6 +149,7 @@ class CheckReport(BaseModel):
     e2e_probes: list[E2EProbe]
     ok: bool = False
     status: Literal["pass", "fail", "warning"] = "pass"
+    source: Literal["demo", "dump_file", "ssh"] = "demo"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ def build_report(
     cascade: str,
     links: list[LinkAudit],
     e2e_probes: list[E2EProbe],
+    source: Literal["demo", "dump_file", "ssh"] = "demo",
 ) -> CheckReport:
     """Assemble a CheckReport and compute the overall status."""
     ok = all(link.ok for link in links) and all(probe.ok for probe in e2e_probes)
@@ -239,6 +241,7 @@ def build_report(
         e2e_probes=e2e_probes,
         ok=ok,
         status=status,
+        source=source,
     )
 
 
@@ -261,6 +264,7 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
     overall_text = "OK" if report.ok else "FAILED"
     overall_color = "green" if report.ok else "red"
     lines.append(f"overall: {_paint(overall_text, overall_color, use_color)}")
+    lines.append(f"source: {report.source}")
     lines.append(f"generated_at: {report.generated_at}")
     lines.append("")
 
