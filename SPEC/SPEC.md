@@ -34,6 +34,34 @@ The v1 MVP CLI supports exactly 1 command:
 
 `clients`, `swap-exit`, `test-failover`, and `deploy` are **out of scope for v1** and are deferred to Phase 2 / Post-MVP.
 
+The interactive `menu` command is a Phase 2 UI layer — it does not expand the MVP command set. It provides TTY-based selection among Phase 2 commands and the `check` command.
+
+## 6. Phase 2 / Post-MVP (Out of Scope for v1)
+### deploy
+- **Description:** Deploy cascade configuration to all nodes.
+- **Options:** `--dry-run` — show what would be deployed without applying changes.
+- **Pre-deploy backups:** enabled (`pre_deploy` backups before deployment).
+- **Exit:** If invoked on v1 CLI, command is a stub that exits with code 64 (`ExitCode.USAGE_ERROR`) and reports `Phase 2: Not in MVP`.
+
+### swap-exit
+- **Description:** Swap exit node.
+- **Options:** `--new-host` — new exit node host.
+- **Exit:** Stub, exit code 64.
+
+### test-failover
+- **Description:** Test failover.
+- **Options:** `--target mid|out`, `--wait-healthcheck`.
+- **Exit:** Stub, exit code 64.
+
+### clients
+- **Description:** Client management (`add|remove|list`).
+- **Exit:** Stub, exit code 64.
+
+### menu
+- **Description:** Interactive TTY menu for awg-ctl (requires TTY and questionary).
+- **Behavior:** Presents a list of choices (`check`, `clients`, `swap-exit`, `test-failover`). Selecting `check` runs the check command and exits with code 0 (or 1 if report is not OK). Selecting any Phase 2 stub exits with code 64 and reports "Phase 2".
+- **Options:** `--interactive` — launch interactive menu from non-Typer entry point.
+
 ## 6. Phase 2 / Post-MVP (Out of Scope for v1)
 ### deploy
 - **Description:** Deploy cascade configuration to all nodes.
