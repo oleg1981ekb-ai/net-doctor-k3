@@ -1,10 +1,29 @@
-project_name: "{{ project_name }}"
-description: "{{ project_description }}"
+project_name: "awg-ctl"
+description: "Service CLI utility for managing a 3-server AmneziaWG cascade"
+
+mvp:
+  commands:
+    - check
+    - swap-exit
+    - test-failover
+    - clients
+  out_of_scope:
+    - deploy
+
+phase_2:
+  title: "Phase 2 / Post-MVP (Out of Scope for v1)"
+  deploy:
+    description: "Deploy cascade configuration to all nodes"
+    options:
+      --dry-run: "Show what would be deployed without applying changes."
+    pre_deploy:
+      backups: true
+      description: "Create backups before deployment."
 
 components:
-  - name: "{{ package_name }}"
+  - name: "awg_cascade_ctl"
     type: api
     version: "0.1.0"
     authors:
-      - "{{ tech_lead_handle }}"
+      - "oleg1981ekb-ai"
     requirements: {}

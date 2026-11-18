@@ -68,6 +68,22 @@ def schema(
         typer.echo(f"```json\n{json.dumps(schema_obj, indent=2)}\n```")
 
 
+@app.command(name="deploy")
+def deploy(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="[Phase 2] Show what would be deployed without applying changes.",
+    ),
+) -> None:
+    """Deploy cascade configuration to all nodes (Phase 2)."""
+    typer.echo(
+        "ERROR: deploy is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
+        err=True,
+    )
+    raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+
 config_app = typer.Typer(help="Configuration commands.")
 
 
