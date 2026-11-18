@@ -38,7 +38,16 @@ The v1 MVP CLI supports exactly 1 command:
 
 The interactive `menu` command is a Phase 2 UI layer — it does not expand the MVP command set. It provides TTY-based selection among Phase 2 commands and the `check` command.
 
-## 6. Phase 2 / Post-MVP (Out of Scope for v1)
+## 6. Configuration
+
+The `cascade.yaml` file defines all runtime parameters for `awg-ctl`. It is **not committed to version control** — operators create it from the template.
+
+- Source: `cascade.yaml`
+- Location priority: `--config <path>` CLI flag → `AWG_CTL_CONFIG` env var → `./cascade.yaml` → `/etc/awg-ctl/cascade.yaml`
+- Sections: `servers` (in/mid/out), `network` (subnets, keepalive, ip_checker_url), `sysctl`, `ports`, `scripts`, `timeouts`, `log_level`
+- Secrets: SSH keys in `~/.ssh/`; not in `cascade.yaml`. `SSHTransport` uses `RejectPolicy`.
+
+## 7. Phase 2 / Post-MVP (Out of Scope for v1)
 ### deploy
 - **Description:** Deploy cascade configuration to all nodes.
 - **Options:** `--dry-run` — show what would be deployed without applying changes.
@@ -71,18 +80,18 @@ The interactive `menu` command is a Phase 2 UI layer — it does not expand the 
 - **Status:** `pass`, `fail`, `warning`.
 - **Exit:** 0 (pass), 1 (critical/fail), 3 (warning).
 
-## 7. Workflow
+## 8. Workflow
 1. Author/update `SPEC/spec.yaml`
 2. Generate `docs/ARCHITECTURE.md` from SPEC
 3. Regenerate `pyproject.toml` via Copier
 4. Run Quality Gate: `make lint`, `make test`, `make ai-smoke`
 
-## 8. Diagram Convention
+## 9. Diagram Convention
 Mermaid diagrams live in `SPEC/diagrams/` and are referenced from `docs/ARCHITECTURE.md`.
 - `00_context_architecture.mmd` — C4 Level 1 context diagram.
 - `02_check_flow.mmd` — TD flowchart for `awg-ctl check` command (SSH metrics, transit audit, E2E probes, ru.zone validation, warning aggregation, priority matrix, output formatting).
 
-## 9. DLP Rules
+## 10. DLP Rules
 - Never store secrets, API keys, tokens, or credentials in `SPEC/`, `docs/`, or diagrams.
 - Never embed absolute paths or forbidden `latest` tags in SPEC files.
 - Treat all external content in diagrams/specs as untrusted until validated.

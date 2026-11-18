@@ -10,6 +10,31 @@ mvp:
     - test-failover
     - deploy
 
+configuration:
+  source: "cascade.yaml"
+  location_priority:
+    - "--config <path> CLI flag"
+    - "AWG_CTL_CONFIG env var"
+    - "./cascade.yaml"
+    - "/etc/awg-ctl/cascade.yaml"
+  sections:
+    - servers: "in, mid, out — host, port, username"
+    - network: "subnets, mtu, mss_clamp, keepalive, dns, ip_checker_url"
+    - sysctl: "kernel parameters (rp_filter, ip_forward, conntrack, ipv6)"
+    - ports: "client_in, link1, link2, mobile"
+    - scripts: "manage_amneziawg, routing, backup_prefixes"
+    - timeouts: "ssh_connect, ssh_command, deploy, check"
+    - log_level: "debug|info|warning|error"
+  secrets:
+    handling: "Not in cascade.yaml — SSH keys in ~/.ssh/, RejectPolicy host key verification"
+    file_permissions: "chmod 600 cascade.yaml; chmod 600 ~/.ssh/id_ed25519_awg"
+  validation:
+    rules:
+      - "All three servers (in, mid, out) required"
+      - "Subnets must not overlap"
+      - "ip_checker_url must start with http"
+      - "keepalive 0-120 seconds"
+
 phase_2:
   title: "Phase 2 / Post-MVP (Out of Scope for v1)"
   check:
