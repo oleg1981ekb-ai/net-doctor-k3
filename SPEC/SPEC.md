@@ -17,7 +17,8 @@ SPEC is the source of truth **only for project requirements and architecture** (
 SPEC/
 ├── spec.yaml             # Main specification (requirements and architecture)
 ├── diagrams/             # Architecture diagrams
-│   └── architecture.mmd  # Mermaid architecture diagram
+│   ├── 00_context_architecture.mmd  # C4 Context diagram
+│   └── 02_check_flow.mmd            # Check command flow TD
 └── adr/                  # Architectural Decision Records
     └── ADR-0001-initial-setup.md
 ```
@@ -46,6 +47,8 @@ The v1 MVP CLI supports exactly 4 commands:
 
 ## 8. Diagram Convention
 Mermaid diagrams live in `SPEC/diagrams/` and are referenced from `docs/ARCHITECTURE.md`.
+- `00_context_architecture.mmd` — C4 Level 1 context diagram.
+- `02_check_flow.mmd` — TD flowchart for `awg-ctl check` command (SSH metrics, transit audit, E2E probes, ru.zone validation, warning aggregation, priority matrix, output formatting).
 
 ## 9. DLP Rules
 - Never store secrets, API keys, tokens, or credentials in `SPEC/`, `docs/`, or diagrams.
