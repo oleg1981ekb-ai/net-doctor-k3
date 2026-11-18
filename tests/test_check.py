@@ -166,3 +166,11 @@ def test_report_to_json_zero_links() -> None:
     assert data["schema"] == "awg-ctl/check/v1"
     assert data["links"] == []
     assert data["ok"] is True
+
+
+def test_parse_awg_dump_handles_off_keepalive() -> None:
+    """Real AWG dump uses 'off' for keepalive; should parse as 0."""
+    line = "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    peers = parse_awg_dump(line)
+    assert len(peers) == 1
+    assert peers[0].persistent_keepalive == 0
