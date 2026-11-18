@@ -4,6 +4,7 @@ import json
 import os
 import select
 import sys
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -109,14 +110,14 @@ def _wait_for_key_or_timeout(seconds: float) -> bool:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _source_selection_menu() -> tuple[str | None, str | None]:
+def _source_selection_menu() -> tuple[str | None, str | None, Literal["in", "mid", "out", "all"]]:
     """Open interactive source-selection menu.
 
-    Returns (config_path, dump_file) chosen by user.
-    On ESC/Ctrl+C/EOF or empty selection -> (None, None) (demo fallback).
+    Returns (config_path, dump_file, server_target) chosen by user.
+    On ESC/Ctrl+C/EOF or empty selection -> (None, None, "in").
     """
     if not QUESTIONARY_AVAILABLE:
-        return (None, None)
+        return (None, None, "in")
     try:
         answer = questionary.select(
             "Источник данных:",
@@ -130,20 +131,32 @@ def _source_selection_menu() -> tuple[str | None, str | None]:
                     value="dump_file",
                 ),
                 questionary.Choice(
-                    title="SSH (через cascade.yaml) — ввести путь к конфигу (например ./cascade.yaml) -> SSH к servers.in",
-                    value="ssh",
+                    title="SSH (servers.in) — путь к cascade.yaml -> SSH к серверу in",
+                    value="ssh_in",
+                ),
+                questionary.Choice(
+                    title="SSH (servers.mid) — путь к cascade.yaml -> SSH к серверу mid",
+                    value="ssh_mid",
+                ),
+                questionary.Choice(
+                    title="SSH (servers.out) — путь к cascade.yaml -> SSH к серверу out",
+                    value="ssh_out",
+                ),
+                questionary.Choice(
+                    title="SSH (все серверы) — путь к cascade.yaml -> SSH к in, mid, out по очереди",
+                    value="ssh_all",
                 ),
             ],
             use_indicator=True,
         ).ask()
     except (KeyboardInterrupt, EOFError):
-        return (None, None)
+        return (None, None, "in")
 
     if answer is None:
-        return (None, None)
+        return (None, None, "in")
 
     if answer == "demo":
-        return (None, None)
+        return (None, None, "in")
 
     if answer == "dump_file":
         try:
@@ -152,30 +165,31 @@ def _source_selection_menu() -> tuple[str | None, str | None]:
                 default="./dump.txt",
             ).ask()
         except (KeyboardInterrupt, EOFError):
-            return (None, None)
+            return (None, None, "in")
         if not path:
-            return (None, None)
-        return (None, path)
+            return (None, None, "in")
+        return (None, path, "in")
 
-    if answer == "ssh":
+    if answer in ("ssh_in", "ssh_mid", "ssh_out", "ssh_all"):
         try:
             path = questionary.text(
                 "Путь к cascade.yaml:",
                 default="./cascade.yaml",
             ).ask()
         except (KeyboardInterrupt, EOFError):
-            return (None, None)
+            return (None, None, "in")
         if not path:
-            return (None, None)
-        return (path, None)
+            return (None, None, "in")
+        target: Literal["in", "mid", "out", "all"] = answer[len("ssh_"):]
+        return (path, None, target)
 
-    return (None, None)
+    return (None, None, "in")
 
 
 def _resolve_check_source(
     config_path: str | None,
     dump_file: str | None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, Literal["in", "mid", "out", "all"]]:
     """Resolve the check data source.
 
     Explicit --config/--dump-file is used as-is. Otherwise, in interactive mode,
@@ -184,13 +198,13 @@ def _resolve_check_source(
     returns inputs unchanged (demo).
     """
     if config_path is not None or dump_file is not None:
-        return (config_path, dump_file)
+        return (config_path, dump_file, "in")
     if not _is_interactive_mode():
-        return (None, None)
+        return (None, None, "in")
     typer.echo("Источник: demo (тест) | 3с до меню... Нажмите любую клавишу для выбора.")
     if _wait_for_key_or_timeout(3.0):
         return _source_selection_menu()
-    return (None, None)
+    return (None, None, "in")
 
 
 def _run_check(
@@ -198,6 +212,7 @@ def _run_check(
     color: Literal["auto", "always", "never"] = "auto",
     config_path: str | Path | None = None,
     dump_file: str | Path | None = None,
+    server_target: Literal["in", "mid", "out", "all"] = "in",
 ) -> int:
     """Run check and return exit code. Used by both CLI menu and `check` command.
 
@@ -206,6 +221,7 @@ def _run_check(
         color: colour mode.
         config_path: path to cascade.yaml to load real config and SSH dump.
         dump_file: path to local dump file (overrides config if both given).
+        server_target: SSH target server from cascade.yaml: in, mid, out, or all.
     """
     # Determine data source provenance
     if dump_file:
@@ -216,13 +232,15 @@ def _run_check(
         source = "demo"
 
     try:
-        peers = load_real_dump(config_path=config_path, dump_file=dump_file)
+        peers = load_real_dump(
+            config_path=config_path, dump_file=dump_file, server_target=server_target
+        )
     except FileNotFoundError as exc:
         typer.echo(f"ERROR: config file not found: {exc}", err=True)
         raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
 
-    links = audit_peers(peers, now_unix=1700000030)
-    probes = load_e2e_probes(config_path=config_path)
+    links = audit_peers(peers, now_unix=int(time.time()))
+    probes = load_e2e_probes(config_path=config_path, server_target=server_target)
 
     report = build_report(
         cascade="cascade-alpha",
@@ -276,14 +294,22 @@ def check(
         "--dump-file",
         help="Path to local AWG dump file (overrides --config).",
     ),
+    server_target: Literal["in", "mid", "out", "all"] | None = typer.Option(
+        None,
+        "--server",
+        "-s",
+        help="SSH target server from cascade.yaml: in, mid, out, or all.",
+    ),
 ) -> None:
     """Run cascade check and E2E probe."""
-    config_path, dump_file = _resolve_check_source(config_path, dump_file)
+    config_path, dump_file, resolved_target = _resolve_check_source(config_path, dump_file)
+    final_target = server_target or resolved_target
     exit_code = _run_check(
         json_output=json_output,
         color=color,
         config_path=config_path,
         dump_file=dump_file,
+        server_target=final_target,
     )
     raise typer.Exit(code=exit_code)
 
@@ -422,8 +448,13 @@ def menu(
     cmd = selected.split()[0]
 
     if cmd == "check":
-        config_path, _dump_file = _resolve_check_source(config_path, None)
-        exit_code = _run_check(json_output=False, config_path=config_path)
+        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        exit_code = _run_check(
+            json_output=False,
+            config_path=resolved_config,
+            dump_file=resolved_dump,
+            server_target=resolved_target,
+        )
         raise typer.Exit(code=exit_code)
 
     if cmd in ("clients", "swap-exit", "test-failover", "deploy"):

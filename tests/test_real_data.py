@@ -125,3 +125,85 @@ def test_fetch_and_parse_dump() -> None:
     mock_transport.run_awg_dump.assert_called_once()
     mock_transport.close.assert_called_once()
     assert result == []
+
+
+def test_load_real_dump_target_ssh(monkeypatch) -> None:
+    """load_real_dump_target SSHs to cfg.servers["mid"] and returns parsed peers."""
+    from awg_cascade_ctl import check as check_module
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    mock_cfg = mock.MagicMock()
+    mock_server = mock.MagicMock()
+    mock_server.host = "vpn-mid.example.com"
+    mock_server.port = 2222
+    mock_server.username = "awg"
+    mock_cfg.servers = {"mid": mock_server}
+    mock_cfg.timeouts.ssh_connect = 10
+    mock_cfg.timeouts.ssh_command = 30
+
+    captured = {}
+
+    mock_transport = mock.MagicMock(spec=SSHTransport)
+    mock_transport.run_awg_dump.return_value = [
+        RawPeer(
+            interface="awg0",
+            peer_endpoint="10.10.1.2:51820",
+            latest_handshake_unix=1700000001,
+            persistent_keepalive=25,
+        )
+    ]
+
+    def fake_transport(**kwargs):
+        captured.update(kwargs)
+        return mock_transport
+
+    monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
+
+    peers = check_module.load_real_dump_target(mock_cfg, "mid")
+    assert len(peers) == 1
+    assert peers[0].peer_endpoint == "10.10.1.2:51820"
+    assert captured["host"] == "vpn-mid.example.com"
+    assert captured["port"] == 2222
+    assert captured["user"] == "awg"
+
+
+def test_load_real_dump_all_aggregates(monkeypatch) -> None:
+    """load_real_dump_all aggregates peers from in, mid, out targets."""
+    from awg_cascade_ctl import check as check_module
+
+    captured_targets = []
+
+    def fake_load_real_dump_target(cfg, target):
+        captured_targets.append(target)
+        return [
+            RawPeer(
+                interface=f"awg-{target}",
+                peer_endpoint=f"10.10.1.{len(target)}:51820",
+                latest_handshake_unix=1700000000,
+                persistent_keepalive=25,
+            )
+        ]
+
+    monkeypatch.setattr(check_module, "load_real_dump_target", fake_load_real_dump_target)
+
+    peers = check_module.load_real_dump_all(mock.MagicMock())
+    assert len(peers) == 3
+    assert captured_targets == ["in", "mid", "out"]
+    assert {peer.interface for peer in peers} == {"awg-in", "awg-mid", "awg-out"}
+
+
+def test_load_e2e_probes_skips_for_mid_out(monkeypatch) -> None:
+    """load_e2e_probes returns [] for mid/out without calling subprocess."""
+    from awg_cascade_ctl import check as check_module
+
+    subprocess_called = {"value": False}
+
+    def fake_run(*args, **kwargs):
+        subprocess_called["value"] = True
+        return mock.Mock(returncode=0, stdout="1.2.3.4\n")
+
+    monkeypatch.setattr(check_module.subprocess, "run", fake_run)
+
+    assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="mid") == []
+    assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="out") == []
+    assert subprocess_called["value"] is False

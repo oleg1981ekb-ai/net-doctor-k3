@@ -7,9 +7,12 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from awg_cascade_ctl.config import CascadeConfig
 
 HANDSHAKE_MAX_AGE_SEC = 180
 REQUIRED_KEEPALIVE = 25
@@ -36,15 +39,51 @@ def _demo_dump() -> str:
     return "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
 
 
+def load_real_dump_target(
+    cfg: CascadeConfig,
+    target: Literal["in", "mid", "out"],
+) -> list[RawPeer]:
+    """Load AWG peer data from a specific cascade server via SSH.
+
+    Args:
+        cfg: Loaded CascadeConfig containing server configuration.
+        target: Which server to fetch the dump from (in, mid, or out).
+    """
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    server = cfg.servers[target]
+    transport = SSHTransport(
+        host=server.host,
+        port=server.port,
+        user=server.username,
+        connect_timeout=cfg.timeouts.ssh_connect,
+        command_timeout=cfg.timeouts.ssh_command,
+    )
+    try:
+        transport.connect()
+        return transport.run_awg_dump()
+    finally:
+        transport.close()
+
+
+def load_real_dump_all(cfg: CascadeConfig) -> list[RawPeer]:
+    """Load AWG peer data from all cascade servers via SSH (in, mid, out)."""
+    peers: list[RawPeer] = []
+    for target in ("in", "mid", "out"):
+        peers.extend(load_real_dump_target(cfg, target))
+    return peers
+
+
 def load_real_dump(
     config_path: str | Path | None = None,
     dump_file: str | Path | None = None,
+    server_target: Literal["in", "mid", "out", "all"] = "in",
 ) -> list[RawPeer]:
     """Load AWG peer data from a real source.
 
     Priority:
     1. `dump_file` — local dump file (used for tests/CI).
-    2. `config_path` — cascade.yaml → SSH to `servers.in` to fetch dump.
+    2. `config_path` — cascade.yaml → SSH to the selected server to fetch dump.
     3. Fallback — hardcoded demo data (backward compatible).
     """
     if dump_file:
@@ -52,33 +91,26 @@ def load_real_dump(
         return parse_awg_dump(text)
     if config_path:
         from awg_cascade_ctl.config import CascadeConfig
-        from awg_cascade_ctl.ssh import SSHTransport
 
         cfg = CascadeConfig.load(config_path)
-        server = cfg.servers["in"]
-        transport = SSHTransport(
-            host=server.host,
-            port=server.port,
-            user=server.username,
-            connect_timeout=cfg.timeouts.ssh_connect,
-            command_timeout=cfg.timeouts.ssh_command,
-        )
-        try:
-            transport.connect()
-            return transport.run_awg_dump()
-        finally:
-            transport.close()
+        if server_target == "all":
+            return load_real_dump_all(cfg)
+        return load_real_dump_target(cfg, server_target)
     return parse_awg_dump(_demo_dump())
 
 
 def load_e2e_probes(
     config_path: str | Path | None = None,
+    server_target: Literal["in", "mid", "out", "all"] = "in",
 ) -> list[E2EProbe]:
     """Run E2E IP probe from config's `ip_checker_url` via curl.
 
     Returns a list with one E2EProbe (source: awg-in) if probe succeeds,
-    or an empty list if config is missing or probe fails.
+    or an empty list if config is missing or probe fails. The probe runs
+    only for the "in" server or for all servers; other targets skip it.
     """
+    if server_target not in ("in", "all"):
+        return []
     if not config_path:
         return []
     from awg_cascade_ctl.config import CascadeConfig
@@ -179,7 +211,14 @@ def parse_awg_dump(dump: str) -> list[RawPeer]:
         interface, _pubkey, _psk, endpoint, _allowed, handshake, _rx, _tx, keepalive = parts
         try:
             handshake_unix = int(handshake)
-            keepalive_val = int(keepalive) if keepalive.strip() else None
+            keepalive_str = keepalive.strip()
+            if keepalive_str in ("", "off", "Off", "OFF"):
+                keepalive_val = 0
+            else:
+                try:
+                    keepalive_val = int(keepalive_str)
+                except ValueError:
+                    continue
         except ValueError:
             continue
         peers.append(
