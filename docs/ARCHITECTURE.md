@@ -39,7 +39,23 @@ chmod 600 cascade.yaml
 3. `./cascade.yaml` (current working directory)
 4. `/etc/awg-ctl/cascade.yaml` (system-wide)
 
-### 6.2 Configuration Structure
+### 6.2 Real Data Loading in `check` and `menu`
+
+The `check` and `menu` commands support real data input in addition to the fallback demo data:
+
+| Source | Flag | Behavior |
+|--------|------|----------|
+| Local dump file | `--dump-file PATH` | Parse AWG dump from local file (CI/test friendly, no SSH) |
+| `cascade.yaml` | `--config PATH` | Load config → SSH to `servers.in` host → run `awg show all dump` → parse result |
+
+**Priority:**
+1. `--dump-file PATH` (highest) — local file, overrides config
+2. `--config PATH` — load cascade.yaml, connect via SSH to `servers.in`
+3. Fallback — hardcoded demo data (backward compatible, for demos without real hosts)
+
+**E2E probe:** When `--config` is provided, `check` reads `network.ip_checker_url` from the config and runs a `curl` GET probe to verify end-to-end IP visibility through the cascade. Probes are skipped when no config is provided.
+
+### 6.3 Configuration Structure
 ```yaml
 servers:
   in:

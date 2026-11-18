@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Literal
 
 import typer
@@ -13,7 +14,8 @@ from awg_cascade_ctl.check import (
     audit_peers,
     build_report,
     format_report_text,
-    parse_awg_dump,
+    load_e2e_probes,
+    load_real_dump,
     report_schema,
     report_to_json,
 )
@@ -69,13 +71,23 @@ def _is_interactive_mode() -> bool:
     return sys.stdin.isatty() and os.environ.get("CI", "").lower() not in ("true", "1", "yes")
 
 
-def _run_check(json_output: bool, color: Literal["auto", "always", "never"] = "auto") -> int:
-    """Run check and return exit code. Used by both CLI menu and `check` command."""
-    peers = parse_awg_dump(
-        "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
-    )
+def _run_check(
+    json_output: bool,
+    color: Literal["auto", "always", "never"] = "auto",
+    config_path: str | Path | None = None,
+    dump_file: str | Path | None = None,
+) -> int:
+    """Run check and return exit code. Used by both CLI menu and `check` command.
+
+    Args:
+        json_output: if True, output strict JSON.
+        color: colour mode.
+        config_path: path to cascade.yaml to load real config and SSH dump.
+        dump_file: path to local dump file (overrides config if both given).
+    """
+    peers = load_real_dump(config_path=config_path, dump_file=dump_file)
     links = audit_peers(peers, now_unix=1700000030)
-    probes = []
+    probes = load_e2e_probes(config_path=config_path)
     report = build_report(cascade="cascade-alpha", links=links, e2e_probes=probes)
 
     use_color = _use_color(color)
@@ -112,9 +124,25 @@ def check(
         "--color",
         help="Force colour mode: auto (default), always, or never.",
     ),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to cascade.yaml for SSH-based real data loading.",
+    ),
+    dump_file: str | None = typer.Option(
+        None,
+        "--dump-file",
+        help="Path to local AWG dump file (overrides --config).",
+    ),
 ) -> None:
     """Run cascade check and E2E probe."""
-    exit_code = _run_check(json_output=json_output, color=color)
+    exit_code = _run_check(
+        json_output=json_output,
+        color=color,
+        config_path=config_path,
+        dump_file=dump_file,
+    )
     raise typer.Exit(code=exit_code)
 
 
@@ -203,7 +231,14 @@ def clients(
 
 
 @app.command(name="menu")
-def menu() -> None:
+def menu(
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to cascade.yaml (passed to check if selected).",
+    ),
+) -> None:
     """Interactive menu for awg-ctl (TTY only)."""
     if not _is_interactive_mode():
         typer.echo(
@@ -245,7 +280,7 @@ def menu() -> None:
     cmd = selected.split()[0]
 
     if cmd == "check":
-        exit_code = _run_check(json_output=False)
+        exit_code = _run_check(json_output=False, config_path=config_path)
         raise typer.Exit(code=exit_code)
 
     if cmd in ("clients", "swap-exit", "test-failover", "deploy"):

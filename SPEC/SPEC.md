@@ -30,6 +30,7 @@ The v1 MVP CLI supports exactly 1 command:
 - `check` — read-only cascade diagnostics and E2E probe
   - flags: `--json` (strict JSON on stdout), `--verbose`
   - flag: `--color auto|always|never`; respects `NO_COLOR` env var
+  - flags: `--config PATH` (cascade.yaml, SSH data source), `--dump-file PATH` (local dump, CI/test)
   - schema: `awg-ctl/check/v1`; `status`: pass | fail | warning
   - priority matrix: `1 (CRITICAL) > 3 (WARNING) > 0 (OK)`
   - E2E probes and fail-closed transit audit are included
@@ -48,6 +49,18 @@ The `cascade.yaml` file defines all runtime parameters for `awg-ctl`. It is **no
 - Secrets: SSH keys in `~/.ssh/`; not in `cascade.yaml`. `SSHTransport` uses `RejectPolicy`.
 
 ## 7. Phase 2 / Post-MVP (Out of Scope for v1)
+### check
+- **Description:** Read-only cascade check and E2E probe.
+- **Flags:** `--json` (strict JSON on stdout), `--color` (auto|always|never, supports NO_COLOR).
+- **Flags:** `--config PATH` (cascade.yaml, SSH data source), `--dump-file PATH` (local dump, CI/test).
+- **Schema:** `awg-ctl/check/v1` (with `generated_at`, `cascade`, `links`, `e2e_probes`, `ok`, `status`).
+- **Status:** `pass`, `fail`, `warning`.
+- **Exit:** 0 (pass), 1 (critical/fail), 3 (warning).
+- **Data sources:**
+  1. `--dump-file PATH` — local AWG dump file (takes precedence).
+  2. `--config PATH` — load cascade.yaml, SSH to `servers.in` host, run `awg show all dump`, parse.
+  3. Fallback — hardcoded demo data (backward compatible).
+- **E2E probe:** When `--config` provided, reads `network.ip_checker_url` from config and runs `curl` GET to verify IP visibility.
 ### deploy
 - **Description:** Deploy cascade configuration to all nodes.
 - **Options:** `--dry-run` — show what would be deployed without applying changes.
@@ -72,13 +85,20 @@ The `cascade.yaml` file defines all runtime parameters for `awg-ctl`. It is **no
 - **Description:** Interactive TTY menu for awg-ctl (requires TTY and questionary).
 - **Behavior:** Presents a list of choices (`check`, `clients`, `swap-exit`, `test-failover`). Selecting `check` runs the check command and exits with code 0 (or 1 if report is not OK). Selecting any Phase 2 stub exits with code 64 and reports "Phase 2".
 - **Options:** `--interactive` — launch interactive menu from non-Typer entry point.
+- **Options:** `--config PATH` — pass through to the `check` command when selected (real data source: SSH to `servers.in`).
 
 ### check
 - **Description:** Read-only cascade check and E2E probe.
 - **Flags:** `--json` (strict JSON on stdout), `--color` (auto|always|never, supports NO_COLOR).
+- **Flags:** `--config PATH` (cascade.yaml, SSH data source), `--dump-file PATH` (local dump, CI/test).
 - **Schema:** `awg-ctl/check/v1` (with `generated_at`, `cascade`, `links`, `e2e_probes`, `ok`, `status`).
 - **Status:** `pass`, `fail`, `warning`.
 - **Exit:** 0 (pass), 1 (critical/fail), 3 (warning).
+- **Data sources:**
+  1. `--dump-file PATH` — local AWG dump file (takes precedence).
+  2. `--config PATH` — load cascade.yaml, SSH to `servers.in` host, run `awg show all dump`, parse.
+  3. Fallback — hardcoded demo data (backward compatible).
+- **E2E probe:** When `--config` provided, reads `network.ip_checker_url` from config and runs `curl` GET to verify IP visibility.
 
 ## 8. Workflow
 1. Author/update `SPEC/spec.yaml`

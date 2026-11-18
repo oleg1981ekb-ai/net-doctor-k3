@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fabric import Connection
 from paramiko.client import RejectPolicy
 
 from awg_cascade_ctl.errors import ExitCode
 from awg_cascade_ctl.redact import redact_text
+
+if TYPE_CHECKING:
+    from awg_cascade_ctl.check import RawPeer
 
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_COMMAND_TIMEOUT = 30
@@ -72,6 +75,34 @@ class SSHTransport:
         if self._connection is not None:
             self._connection.close()
             self._connection = None
+
+    def run_awg_dump(self) -> list[RawPeer]:
+        """Run `awg show all dump` on the remote host and return parsed peers.
+
+        Returns an empty list if the command fails or the output is empty.
+        """
+        from awg_cascade_ctl.check import parse_awg_dump
+
+        try:
+            result = self.run("awg show all dump")
+            if result.failed or not result.stdout.strip():
+                return []
+            return parse_awg_dump(result.stdout)
+        except Exception as exc:
+            # Transport failure → critical exit
+            raise RuntimeError(f"SSH dump failed: {exc}") from exc
+
+
+def fetch_and_parse_dump(
+    transport: SSHTransport,
+) -> list[RawPeer]:
+    """Connect, run dump, parse, and close. One-shot helper."""
+    try:
+        transport.connect()
+        peers = transport.run_awg_dump()
+        return peers
+    finally:
+        transport.close()
 
 
 def resolve_exit_code(exc: BaseException | None) -> int:

@@ -4,11 +4,17 @@ description: "Service CLI utility for managing a 3-server AmneziaWG cascade"
 mvp:
   commands:
     - check
-  out_of_scope:
-    - clients
-    - swap-exit
-    - test-failover
-    - deploy
+  check:
+    flags:
+      - "--json (strict JSON output)"
+      - "--color (auto|always|never, supports NO_COLOR)"
+      - "--config PATH (cascade.yaml, SSH data source)"
+      - "--dump-file PATH (local dump, CI/test)"
+    out_of_scope:
+      - clients
+      - swap-exit
+      - test-failover
+      - deploy
 
 configuration:
   source: "cascade.yaml"
