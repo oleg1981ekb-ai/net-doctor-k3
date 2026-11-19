@@ -16,3 +16,30 @@ models:
     verification_date: "2026-11-15"
     owner: "{{ tech_lead_handle }}"
     review_by_date: "2027-02-15"
+
+  - provider: google
+    model_id: google/gemma-4-31b-it:free
+    dpa_status: signed
+    zdr_status: enabled
+    max_data_classification: Public
+    verification_date: "2026-11-19"
+    owner: "{{ tech_lead_handle }}"
+    review_by_date: "2027-02-19"
+
+  - provider: nvidia
+    model_id: nvidia/nemotron-3-ultra-550b-a55b:free
+    dpa_status: signed
+    zdr_status: enabled
+    max_data_classification: Public
+    verification_date: "2026-11-19"
+    owner: "{{ tech_lead_handle }}"
+    review_by_date: "2027-02-19"
+
+  - provider: dots-studio
+    model_id: dots-studio/dots-3-note-preview:free
+    dpa_status: signed
+    zdr_status: enabled
+    max_data_classification: Public
+    verification_date: "2026-11-19"
+    owner: "{{ tech_lead_handle }}"
+    review_by_date: "2027-02-19"

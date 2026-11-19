@@ -15,7 +15,7 @@ Output : a single JSON blob on stdout — answers (labeled + de-anonymized),
 Usage:
     python3 council_openrouter.py "your question"
     echo "your question" | python3 council_openrouter.py
-    python3 council_openrouter.py --models "openai/gpt-5.1,x-ai/grok-4" "question"
+    python3 council_openrouter.py --models "google/gemma-3-27b-it:free,meta-llama/llama-3.3-70b-instruct:free" "question"
 
 Reads OPENROUTER_API_KEY from the environment or a .env in CWD / ~/.claude/.
 """
@@ -27,13 +27,13 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-# --- The original Karpathy council. Edit these slugs to taste. ----------------
-# If a slug 404s on OpenRouter, that member is dropped and noted; the rest run.
+# --- The council. Pinned free models approved in .kilo/approved_models.yaml. --
+# Edit these slugs to taste. If a slug 404s on OpenRouter, that member is dropped
+# and noted; the rest run.
 COUNCIL_MODELS = [
-    "openai/gpt-5.5",
-    "google/gemini-3.1-pro-preview",
-    "anthropic/claude-opus-4.8",
-    "x-ai/grok-4.3",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "dots-studio/dots-3-note-preview:free",
 ]
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
