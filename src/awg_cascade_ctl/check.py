@@ -85,7 +85,7 @@ def load_real_dump_all(
     """Load AWG peer data from all cascade servers via SSH (in, mid, out)."""
     peers: list[RawPeer] = []
     for target in ("in", "mid", "out"):
-        peers.extend(load_real_dump_target(cfg, target, key_path=key_path, passphrase=key_passphrase))
+        peers.extend(load_real_dump_target(cfg, target, key_path=key_path, key_passphrase=key_passphrase))
     return peers
 
 
@@ -111,8 +111,8 @@ def load_real_dump(
 
         cfg = CascadeConfig.load(config_path)
         if server_target == "all":
-            return load_real_dump_all(cfg, key_path=key_path, passphrase=key_passphrase)
-        return load_real_dump_target(cfg, server_target, key_path=key_path, passphrase=key_passphrase)
+            return load_real_dump_all(cfg, key_path=key_path, key_passphrase=key_passphrase)
+        return load_real_dump_target(cfg, server_target, key_path=key_path, key_passphrase=key_passphrase)
     return parse_awg_dump(_demo_dump())
 
 

@@ -134,9 +134,7 @@ class SSHTransport:
         """Open a secure Fabric connection (reject missing host keys)."""
         # Build connect_kwargs only for explicitly provided key_path / passphrase.
         # If key_path is None we rely on ssh-agent auto-detection or default keys.
-        connect_kwargs: dict[str, Any] = {
-            "connect_timeout": self.connect_timeout,
-        }
+        connect_kwargs: dict[str, Any] = {}
 
         if self.key_path is not None:
             connect_kwargs["key_filename"] = self.key_path
@@ -148,7 +146,7 @@ class SSHTransport:
             user=self.user,
             port=self.port,
             connect_timeout=self.connect_timeout,
-            **connect_kwargs,
+            connect_kwargs=connect_kwargs,
         )
         return self._connection
 

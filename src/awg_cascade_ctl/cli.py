@@ -247,7 +247,8 @@ def _run_check(
         )
     except RuntimeError as exc:
         # If SSH key is encrypted and no passphrase provided, try interactive prompt
-        if "PasswordRequiredException" in str(exc) and ask_pass and sys.stdin.isatty():
+        msg = str(exc).lower()
+        if ("passwordrequired" in msg or "encrypted" in msg) and ask_pass and sys.stdin.isatty():
             try:
                 from typer import prompt
                 new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
@@ -464,7 +465,7 @@ def menu(
         help="Path to SSH private key file (passed to check if selected).",
     ),
     ask_pass: bool = typer.Option(
-        False,
+        True,
         "--ask-pass",
         help="Prompt for passphrase when key is encrypted (passed to check if selected).",
     ),
