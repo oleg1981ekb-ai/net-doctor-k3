@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,9 +58,16 @@ def load_real_dump_target(
 
     server = cfg.servers[target]
     # Resolve key: explicit CLI → config → agent → auto-detect
-    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+    resolved_key, needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
     # If passphrase provided via CLI/env, use it; otherwise rely on agent
     effective_passphrase = key_passphrase if key_passphrase is not None else None
+
+    # Emit key status for user-facing diagnostics
+    if resolved_key:
+        status = "encrypted" if needs_passphrase else "unencrypted"
+        print(f"* SSH key: {resolved_key} ({status})", file=sys.stderr)
+    else:
+        print("* SSH key: ssh-agent / auto-detect (decrypted)", file=sys.stderr)
 
     transport = SSHTransport(
         host=server.host,
