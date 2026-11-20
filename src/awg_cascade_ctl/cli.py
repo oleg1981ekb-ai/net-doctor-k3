@@ -213,6 +213,9 @@ def _run_check(
     config_path: str | Path | None = None,
     dump_file: str | Path | None = None,
     server_target: Literal["in", "mid", "out", "all"] = "in",
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
+    ask_pass: bool = False,
 ) -> int:
     """Run check and return exit code. Used by both CLI menu and `check` command.
 
@@ -222,6 +225,9 @@ def _run_check(
         config_path: path to cascade.yaml to load real config and SSH dump.
         dump_file: path to local dump file (overrides config if both given).
         server_target: SSH target server from cascade.yaml: in, mid, out, or all.
+        key_path: optional SSH key path override for SSH-based dump loading.
+        key_passphrase: optional SSH key passphrase override.
+        ask_pass: if True, prompt interactively for passphrase on encrypted key.
     """
     # Determine data source provenance
     if dump_file:
@@ -233,8 +239,30 @@ def _run_check(
 
     try:
         peers = load_real_dump(
-            config_path=config_path, dump_file=dump_file, server_target=server_target
+            config_path=config_path,
+            dump_file=dump_file,
+            server_target=server_target,
+            key_path=key_path,
+            key_passphrase=key_passphrase,
         )
+    except RuntimeError as exc:
+        # If SSH key is encrypted and no passphrase provided, try interactive prompt
+        if "PasswordRequiredException" in str(exc) and ask_pass and sys.stdin.isatty():
+            try:
+                from typer import prompt
+                new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
+                peers = load_real_dump(
+                    config_path=config_path,
+                    dump_file=dump_file,
+                    server_target=server_target,
+                    key_path=key_path,
+                    key_passphrase=new_pass,
+                )
+            except (KeyboardInterrupt, EOFError):
+                typer.echo("\nAborted.", err=True)
+                raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+        else:
+            raise
     except FileNotFoundError as exc:
         typer.echo(f"ERROR: config file not found: {exc}", err=True)
         raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
@@ -300,16 +328,40 @@ def check(
         "-s",
         help="SSH target server from cascade.yaml: in, mid, out, or all.",
     ),
+    key_path: str | None = typer.Option(
+        None,
+        "--key-path",
+        help="Path to SSH private key file (overrides agent/config auto-detect).",
+    ),
+    key_passphrase: str | None = typer.Option(
+        None,
+        "--key-passphrase",
+        help="Passphrase for encrypted SSH key (use with --key-path; avoid if key in ssh-agent).",
+    ),
+    ask_pass: bool = typer.Option(
+        False,
+        "--ask-pass",
+        help="Prompt interactively for passphrase when key is encrypted (CI/non-interactive use SSH_KEY_PASSPHRASE env).",
+    ),
 ) -> None:
     """Run cascade check and E2E probe."""
     config_path, dump_file, resolved_target = _resolve_check_source(config_path, dump_file)
     final_target = server_target or resolved_target
+
+    # Resolve passphrase priority: CLI arg → env var → interactive prompt (if --ask-pass)
+    effective_passphrase = key_passphrase
+    if effective_passphrase is None:
+        effective_passphrase = os.environ.get("SSH_KEY_PASSPHRASE")
+
     exit_code = _run_check(
         json_output=json_output,
         color=color,
         config_path=config_path,
         dump_file=dump_file,
         server_target=final_target,
+        key_path=key_path,
+        key_passphrase=effective_passphrase,
+        ask_pass=ask_pass,
     )
     raise typer.Exit(code=exit_code)
 
@@ -406,6 +458,16 @@ def menu(
         "-c",
         help="Path to cascade.yaml (passed to check if selected).",
     ),
+    key_path: str | None = typer.Option(
+        None,
+        "--key-path",
+        help="Path to SSH private key file (passed to check if selected).",
+    ),
+    ask_pass: bool = typer.Option(
+        False,
+        "--ask-pass",
+        help="Prompt for passphrase when key is encrypted (passed to check if selected).",
+    ),
 ) -> None:
     """Interactive menu for awg-ctl (TTY only)."""
     if not _is_interactive_mode():
@@ -454,6 +516,8 @@ def menu(
             config_path=resolved_config,
             dump_file=resolved_dump,
             server_target=resolved_target,
+            key_path=key_path,
+            ask_pass=ask_pass,
         )
         raise typer.Exit(code=exit_code)
 

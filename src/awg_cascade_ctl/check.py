@@ -42,20 +42,31 @@ def _demo_dump() -> str:
 def load_real_dump_target(
     cfg: CascadeConfig,
     target: Literal["in", "mid", "out"],
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
 ) -> list[RawPeer]:
     """Load AWG peer data from a specific cascade server via SSH.
 
     Args:
         cfg: Loaded CascadeConfig containing server configuration.
         target: Which server to fetch the dump from (in, mid, or out).
+        key_path: Optional explicit SSH key path (CLI override).
+        key_passphrase: Optional passphrase for encrypted key.
     """
-    from awg_cascade_ctl.ssh import SSHTransport
+    from awg_cascade_ctl.ssh import SSHTransport, resolve_ssh_key_from_config
 
     server = cfg.servers[target]
+    # Resolve key: explicit CLI → config → agent → auto-detect
+    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+    # If passphrase provided via CLI/env, use it; otherwise rely on agent
+    effective_passphrase = key_passphrase if key_passphrase is not None else None
+
     transport = SSHTransport(
         host=server.host,
         port=server.port,
         user=server.username,
+        key_path=resolved_key,
+        passphrase=effective_passphrase,
         connect_timeout=cfg.timeouts.ssh_connect,
         command_timeout=cfg.timeouts.ssh_command,
     )
@@ -66,11 +77,15 @@ def load_real_dump_target(
         transport.close()
 
 
-def load_real_dump_all(cfg: CascadeConfig) -> list[RawPeer]:
+def load_real_dump_all(
+    cfg: CascadeConfig,
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
+) -> list[RawPeer]:
     """Load AWG peer data from all cascade servers via SSH (in, mid, out)."""
     peers: list[RawPeer] = []
     for target in ("in", "mid", "out"):
-        peers.extend(load_real_dump_target(cfg, target))
+        peers.extend(load_real_dump_target(cfg, target, key_path=key_path, passphrase=key_passphrase))
     return peers
 
 
@@ -78,6 +93,8 @@ def load_real_dump(
     config_path: str | Path | None = None,
     dump_file: str | Path | None = None,
     server_target: Literal["in", "mid", "out", "all"] = "in",
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
 ) -> list[RawPeer]:
     """Load AWG peer data from a real source.
 
@@ -94,8 +111,8 @@ def load_real_dump(
 
         cfg = CascadeConfig.load(config_path)
         if server_target == "all":
-            return load_real_dump_all(cfg)
-        return load_real_dump_target(cfg, server_target)
+            return load_real_dump_all(cfg, key_path=key_path, passphrase=key_passphrase)
+        return load_real_dump_target(cfg, server_target, key_path=key_path, passphrase=key_passphrase)
     return parse_awg_dump(_demo_dump())
 
 
