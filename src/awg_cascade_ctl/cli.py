@@ -476,6 +476,18 @@ def menu(
     ),
 ) -> None:
     """Interactive menu for awg-ctl (TTY only)."""
+    # When invoked programmatically (e.g. from main() via --interactive),
+    # Typer's OptionInfo defaults leak into the params. Resolve them to
+    # real Python values so they don't propagate downstream to paramiko.
+    from typer.models import OptionInfo
+
+    if isinstance(key_path, OptionInfo):
+        key_path = None
+    if isinstance(key_passphrase, OptionInfo):
+        key_passphrase = None
+    if isinstance(ask_pass, OptionInfo):
+        ask_pass = True
+
     if not _is_interactive_mode():
         typer.echo(
             "ERROR: Interactive menu requires a TTY and questionary. "
