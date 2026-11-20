@@ -16,6 +16,7 @@ class ServerConfig(BaseModel):
     host: str
     port: int = Field(default=22, ge=1, le=65535)
     username: str
+    ssh_key_path: str | None = None
 
 
 class NetworkConfig(BaseModel):

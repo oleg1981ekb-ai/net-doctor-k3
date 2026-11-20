@@ -173,7 +173,7 @@ def test_load_real_dump_all_aggregates(monkeypatch) -> None:
 
     captured_targets = []
 
-    def fake_load_real_dump_target(cfg, target):
+    def fake_load_real_dump_target(cfg, target, **kwargs):
         captured_targets.append(target)
         return [
             RawPeer(
