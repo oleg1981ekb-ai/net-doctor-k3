@@ -464,6 +464,11 @@ def menu(
         "--key-path",
         help="Path to SSH private key file (passed to check if selected).",
     ),
+    key_passphrase: str | None = typer.Option(
+        None,
+        "--key-passphrase",
+        help="Passphrase for encrypted SSH key (passed to check if selected).",
+    ),
     ask_pass: bool = typer.Option(
         True,
         "--ask-pass",
@@ -518,6 +523,7 @@ def menu(
             dump_file=resolved_dump,
             server_target=resolved_target,
             key_path=key_path,
+            key_passphrase=key_passphrase,
             ask_pass=ask_pass,
         )
         raise typer.Exit(code=exit_code)
