@@ -672,11 +672,11 @@ def menu(
         raise typer.Exit(code=ExitCode.USAGE_ERROR)
 
     choices = [
-        "check        — Run cascade check and E2E probe",
-        "diagnose     — Run full diagnostic report (tunnel/service/routes/logs)",
-        "clients      — Manage clients (Phase 2 stub)",
-        "swap-exit    — Swap exit node (Phase 2 stub)",
-        "test-failover — Test failover (Phase 2 stub)",
+        "Server       — Full server diagnostic (tunnel/service/routes/firewall/logs/scripts)",
+        "Peers        — Peer state check + E2E probe (handshake/keepalive/transfer)",
+        "Clients      — Manage clients (Phase 2 stub)",
+        "Swap exit    — Swap exit node (Phase 2 stub)",
+        "Test failover — Test failover (Phase 2 stub)",
     ]
 
     try:
@@ -695,7 +695,7 @@ def menu(
 
     cmd = selected.split()[0]
 
-    if cmd == "check":
+    if cmd == "Peers":
         resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
         exit_code = _run_check(
             json_output=False,
@@ -708,12 +708,11 @@ def menu(
         )
         raise typer.Exit(code=exit_code)
 
-    if cmd == "diagnose":
+    if cmd == "Server":
         resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
-        diag_server = resolved_target if resolved_target != "all" else "in"
         exit_code = _run_diagnose(
             config_path=resolved_config,
-            server=diag_server,
+            server=resolved_target,
             checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
             color="auto",
             json_output=False,
@@ -724,7 +723,7 @@ def menu(
         )
         raise typer.Exit(code=exit_code)
 
-    if cmd in ("clients", "swap-exit", "test-failover", "deploy"):
+    if cmd in ("Clients", "Swap", "Test", "deploy"):
         typer.echo(
             f"ERROR: {cmd} is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
             err=True,
