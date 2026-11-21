@@ -454,23 +454,33 @@ def _run_diagnose(
     )
 
     try:
+        transport.connect()
+        # Pre-flight: trigger actual SSH connection to detect encrypted key
         try:
-            transport.connect()
-        except RuntimeError as exc:
+            transport.run("true")
+        except Exception as exc:  # noqa: BLE001
             msg = str(exc).lower()
-            encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+            encrypted_err = (
+                "passwordrequired" in msg
+                or "encrypted" in msg
+                or "passphrase" in msg
+            )
             if encrypted_err and ask_pass and sys.stdin.isatty():
                 try:
                     from typer import prompt as typer_prompt
 
                     new_pass = typer_prompt("SSH key passphrase (hidden)", hide_input=True)
-                    transport.passphrase = new_pass
-                    transport.connect()
                 except (KeyboardInterrupt, EOFError):
                     typer.echo("\nAborted.", err=True)
                     return ExitCode.USAGE_ERROR.value
+                transport.passphrase = new_pass
+                transport.close()
+                transport.connect()
+                transport.run("true")
             else:
-                raise
+                typer.echo(f"ERROR: SSH connection failed: {exc}", err=True)
+                return ExitCode.CRITICAL.value
+
         report = run_diagnostics(
             transport=transport,
             server=server,
@@ -700,9 +710,10 @@ def menu(
 
     if cmd == "diagnose":
         resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        diag_server = resolved_target if resolved_target != "all" else "in"
         exit_code = _run_diagnose(
             config_path=resolved_config,
-            server=resolved_target,
+            server=diag_server,
             checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
             color="auto",
             json_output=False,
