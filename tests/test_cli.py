@@ -104,7 +104,11 @@ def test_menu_tty_runs_check(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "Peers        \u2014 Peer state check + E2E probe (handshake/keepalive/transfer)"
+    mock_select.return_value.ask.side_effect = [
+        "Peers        \u2014 Peer state check + E2E probe (handshake/keepalive/transfer)",
+        "Back to main menu",
+        "Exit",
+    ]
     monkeypatch.setattr(questionary, "select", mock_select)
 
     result = runner.invoke(app, ["menu"])
@@ -217,7 +221,11 @@ def test_menu_with_config(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "Peers        — Peer state check + E2E probe (handshake/keepalive/transfer)"
+    mock_select.return_value.ask.side_effect = [
+        "Peers        — Peer state check + E2E probe (handshake/keepalive/transfer)",
+        "Back to main menu",
+        "Exit",
+    ]
     monkeypatch.setattr(questionary, "select", mock_select)
 
     # Mock _run_check to capture args

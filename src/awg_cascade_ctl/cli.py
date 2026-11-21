@@ -680,40 +680,12 @@ def menu(
         "Clients      — Manage clients (Phase 2 stub)",
         "Swap exit    — Swap exit node (Phase 2 stub)",
         "Test failover — Test failover (Phase 2 stub)",
+        "Exit         — Выход из меню",
     ]
 
-    try:
-        selected = questionary.select(
-            "awg-ctl menu — choose an action:",
-            choices=choices,
-            use_indicator=True,
-        ).ask()
-    except (KeyboardInterrupt, EOFError):
-        typer.echo("\nAborted.")
-        raise typer.Exit(code=ExitCode.OK)
-
-    if not selected:
-        typer.echo("No selection made.")
-        raise typer.Exit(code=ExitCode.OK)
-
-    cmd = selected.split()[0]
-
-    if cmd == "Peers":
-        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
-        exit_code = _run_check(
-            json_output=False,
-            config_path=resolved_config,
-            dump_file=resolved_dump,
-            server_target=resolved_target,
-            key_path=key_path,
-            key_passphrase=key_passphrase,
-            ask_pass=ask_pass,
-        )
-        raise typer.Exit(code=exit_code)
-
-    if cmd == "Server":
-        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
-        exit_code = _run_diagnose(
+    def _run_server_diagnose() -> None:
+        resolved_config, _resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        _run_diagnose(
             config_path=resolved_config,
             server=resolved_target,
             checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
@@ -724,17 +696,88 @@ def menu(
             key_passphrase=key_passphrase,
             ask_pass=ask_pass,
         )
-        raise typer.Exit(code=exit_code)
 
-    if cmd in ("Clients", "Swap", "Test", "deploy"):
-        typer.echo(
-            f"ERROR: {cmd} is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
-            err=True,
+    def _run_peers_check() -> None:
+        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        _run_check(
+            json_output=False,
+            config_path=resolved_config,
+            dump_file=resolved_dump,
+            server_target=resolved_target,
+            key_path=key_path,
+            key_passphrase=key_passphrase,
+            ask_pass=ask_pass,
         )
-        raise typer.Exit(code=ExitCode.USAGE_ERROR)
 
-    typer.echo(f"Unknown command: {cmd}")
-    raise typer.Exit(code=ExitCode.USAGE_ERROR)
+    def _post_action_menu(label: str) -> str:
+        """Ask what to do after an action; returns 'check', 'back', or 'exit'."""
+        try:
+            choice = questionary.select(
+                f"{label} завершено. Что дальше?",
+                choices=[
+                    "Check another source",
+                    "Back to main menu",
+                    "Exit",
+                ],
+                use_indicator=True,
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            return "back"
+        if not choice:
+            return "back"
+        head = choice.split()[0]
+        if head == "Check":
+            return "check"
+        if head == "Exit":
+            return "exit"
+        return "back"
+
+    while True:
+        try:
+            selected = questionary.select(
+                "awg-ctl menu — choose an action:",
+                choices=choices,
+                use_indicator=True,
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            typer.echo("\nAborted.")
+            raise typer.Exit(code=ExitCode.OK)
+
+        if not selected:
+            typer.echo("No selection made.")
+            continue
+
+        cmd = selected.split()[0]
+
+        if cmd == "Exit":
+            typer.echo("Goodbye.")
+            raise typer.Exit(code=ExitCode.OK)
+
+        if cmd in ("Server", "Peers"):
+            while True:
+                if cmd == "Server":
+                    _run_server_diagnose()
+                    label = "Server diagnostic"
+                else:
+                    _run_peers_check()
+                    label = "Peer check"
+                nav = _post_action_menu(label)
+                if nav == "exit":
+                    raise typer.Exit(code=ExitCode.OK)
+                if nav == "back":
+                    break
+                # nav == "check" -> run again (re-asks source selection)
+
+        elif cmd in ("Clients", "Swap", "Test", "deploy"):
+            typer.echo(
+                f"ERROR: {cmd} is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
+                err=True,
+            )
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+        else:
+            typer.echo(f"Unknown command: {cmd}")
+            continue
 
 
 config_app = typer.Typer(help="Configuration commands.")
