@@ -437,7 +437,10 @@ def _run_diagnose(
         typer.echo(f"ERROR: server {server} not found in cascade config", err=True)
         return ExitCode.USAGE_ERROR.value
 
-    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(
+        cfg,
+        explicit_key_path=key_path or server_cfg.ssh_key_path,
+    )
 
     effective_passphrase = key_passphrase
     if effective_passphrase is None:
