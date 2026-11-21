@@ -17,6 +17,12 @@ DUMP_LINE = (
     "1700000000\t1000\t2000\t25\n"
 )
 
+# AmneziaWG format with extra obfuscation fields (jitter, port, etc.)
+DUMP_LINE_AMNEZIA = (
+    "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
+    "1700000000\t1000\t2000\t25\tjitter=40\tport=12345\n"
+)
+
 
 def test_parse_awg_dump_single_peer() -> None:
     """A valid peer line is parsed into a RawPeer record."""
@@ -26,6 +32,16 @@ def test_parse_awg_dump_single_peer() -> None:
     assert peer.interface == "awg1"
     assert peer.peer_endpoint == "10.10.1.1:51820"
     assert peer.latest_handshake_unix == 1700000000
+    assert peer.persistent_keepalive == 25
+
+
+def test_parse_awg_dump_amnezia_extra_fields() -> None:
+    """AmneziaWG dump lines with extra obfuscation fields are parsed."""
+    peers = parse_awg_dump(DUMP_LINE_AMNEZIA)
+    assert len(peers) == 1
+    peer = peers[0]
+    assert peer.interface == "awg1"
+    assert peer.peer_endpoint == "10.10.1.1:51820"
     assert peer.persistent_keepalive == 25
 
 

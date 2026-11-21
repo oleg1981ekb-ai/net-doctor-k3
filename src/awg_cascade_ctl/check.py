@@ -231,12 +231,15 @@ def parse_awg_dump(dump: str) -> list[RawPeer]:
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) != 9:
+        if len(parts) < 9:
             continue
-        interface, _pubkey, _psk, endpoint, _allowed, handshake, _rx, _tx, keepalive = parts
+        interface = parts[0]
+        endpoint = parts[3]
+        handshake = parts[5]
+        keepalive_str = parts[8]
         try:
             handshake_unix = int(handshake)
-            keepalive_str = keepalive.strip()
+            keepalive_str = keepalive_str.strip()
             if keepalive_str in ("", "off", "Off", "OFF"):
                 keepalive_val = 0
             else:
