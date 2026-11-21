@@ -22,7 +22,13 @@ from awg_cascade_ctl.check import (
     report_to_json,
 )
 from awg_cascade_ctl.config import CascadeConfig
+from awg_cascade_ctl.diagnose import (
+    diagnose_report_to_json,
+    format_diagnose_report_text,
+    run_diagnostics,
+)
 from awg_cascade_ctl.errors import ExitCode
+from awg_cascade_ctl.ssh import SSHTransport
 
 try:
     import questionary
@@ -248,17 +254,29 @@ def _run_check(
     except RuntimeError as exc:
         # If SSH key is encrypted and no passphrase provided, try interactive prompt
         msg = str(exc).lower()
-        if ("passwordrequired" in msg or "encrypted" in msg) and ask_pass and sys.stdin.isatty():
+        encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+        if encrypted_err and ask_pass and sys.stdin.isatty():
             try:
                 from typer import prompt
+
                 new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
-                peers = load_real_dump(
-                    config_path=config_path,
-                    dump_file=dump_file,
-                    server_target=server_target,
-                    key_path=key_path,
-                    key_passphrase=new_pass,
-                )
+                try:
+                    peers = load_real_dump(
+                        config_path=config_path,
+                        dump_file=dump_file,
+                        server_target=server_target,
+                        key_path=key_path,
+                        key_passphrase=new_pass,
+                    )
+                except RuntimeError as retry_exc:
+                    retry_msg = str(retry_exc).lower()
+                    if "invalid key" in retry_msg or "passwordrequired" in retry_msg:
+                        typer.echo(
+                            "ERROR: неверная парольная фраза для SSH ключа",
+                            err=True,
+                        )
+                        raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                    raise
             except (KeyboardInterrupt, EOFError):
                 typer.echo("\nAborted.", err=True)
                 raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
@@ -381,6 +399,94 @@ def schema(
         typer.echo(json.dumps(schema_obj))
     else:
         typer.echo(f"```json\n{json.dumps(schema_obj, indent=2)}\n```")
+
+
+@app.command(name="diagnose")
+def diagnose(
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to cascade.yaml for SSH-based real data loading.",
+    ),
+    server: str = typer.Option(
+        "in",
+        "--server",
+        "-s",
+        help="SSH target server from cascade.yaml: in, mid, out, or all.",
+    ),
+    checks: str = typer.Option(
+        "tunnel,service,versions,firewall,routes,logs,scripts",
+        "--checks",
+        help="Comma-separated list of diagnostic checks to run.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Strict JSON output; all other output is sent to stdout.",
+    ),
+    color: Literal["auto", "always", "never"] = typer.Option(
+        "auto",
+        "--color",
+        help="Force colour mode: auto (default), always, or never.",
+    ),
+    details: bool = typer.Option(
+        False,
+        "--details",
+        help="Include detailed check output (for debug).",
+    ),
+) -> None:
+    """Run read-only diagnostics for a cascade server."""
+    check_names = [c.strip() for c in checks.split(",") if c.strip()]
+    if server not in ("in", "mid", "out"):
+        typer.echo(f"ERROR: invalid server: {server}", err=True)
+        raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+    from awg_cascade_ctl.config import CascadeConfig
+
+    cfg = CascadeConfig.load(config_path) if config_path else CascadeConfig(
+        servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
+        network=None,  # type: ignore[arg-type]
+        ports=None,  # type: ignore[arg-type]
+        scripts=None,  # type: ignore[arg-type]
+        timeouts=None,  # type: ignore[arg-type]
+    )
+
+    server_cfg = cfg.servers.get(server)
+    if server_cfg is None or server_cfg.host is None:
+        typer.echo(f"ERROR: server {server} not found in cascade config", err=True)
+        raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+    from awg_cascade_ctl.ssh import resolve_ssh_key_from_config
+
+    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=None)
+
+    transport = SSHTransport(
+        host=server_cfg.host,
+        port=server_cfg.port,
+        user=server_cfg.username,
+        key_path=resolved_key,
+        passphrase=os.environ.get("SSH_KEY_PASSPHRASE"),
+        connect_timeout=cfg.timeouts.ssh_connect,
+        command_timeout=cfg.timeouts.ssh_command,
+    )
+
+    report = run_diagnostics(
+        transport=transport,
+        server=server,
+        checks=check_names,
+        server_ip=server_cfg.host or "",
+    )
+
+    use_color = _use_color(color)
+    if json_output:
+        typer.echo(diagnose_report_to_json(report))
+    else:
+        typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
+
+    if report.verdict == "red":
+        raise typer.Exit(code=ExitCode.CRITICAL.value)
+    raise typer.Exit(code=ExitCode.OK.value)
 
 
 @app.command(name="deploy")

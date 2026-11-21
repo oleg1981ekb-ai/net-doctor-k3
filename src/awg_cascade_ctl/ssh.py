@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fabric import Connection
+from paramiko import PasswordRequiredException, SSHException
 from paramiko.client import RejectPolicy
+from paramiko.pkey import PKey
 
 from awg_cascade_ctl.errors import ExitCode
 from awg_cascade_ctl.redact import redact_text
@@ -88,16 +90,26 @@ def resolve_ssh_key(
 
 
 def _key_needs_passphrase(key_path: str) -> bool:
-    """Check whether a private key file is encrypted (Paramiko-style)."""
+    """Check whether a private key file is encrypted.
+
+    Uses paramiko's own loader (which handles OpenSSH, PKCS#8, PEM formats and
+    detects encryption by the cipher marker inside the file rather than a
+    plaintext header). Returns ``True`` when a passphrase is required to decrypt
+    the key, ``False`` when the key is unencrypted or unreadable.
+    """
     try:
-        # Read the file content and check for encryption markers
-        with open(key_path, "r") as f:
-            content = f.read()
-        # Encrypted keys contain "ENCRYPTED" in the PEM header
-        return "ENCRYPTED" in content
-    except (OSError, ValueError):
-        # If we can't read the file, assume it may be encrypted
+        PKey.from_path(key_path)
+    except PasswordRequiredException:
         return True
+    except TypeError as exc:
+        # cryptography raises TypeError("Key is password-protected, but password
+        # was not provided.") for encrypted OpenSSH keys on some backends.
+        return "password" in str(exc).lower()
+    except (SSHException, OSError, ValueError):
+        # Not a valid/readable private key (or an unknown type); do not assume
+        # it is encrypted — callers fall back to agent / auto-detect behaviour.
+        return False
+    return False
 
 
 class SSHTransport:
@@ -157,7 +169,7 @@ class SSHTransport:
         redacted_command = redact_text(command)
         result = self._connection.run(
             redacted_command,
-            hide=False,
+            hide=True,
             warn=True,
             timeout=self.command_timeout,
             **kwargs,

@@ -207,3 +207,85 @@ def test_load_e2e_probes_skips_for_mid_out(monkeypatch) -> None:
     assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="mid") == []
     assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="out") == []
     assert subprocess_called["value"] is False
+
+
+def test_load_real_dump_target_mid_with_key_options(monkeypatch) -> None:
+    """load_real_dump_target for mid passes key_path and key_passphrase to SSHTransport."""
+    from awg_cascade_ctl import check as check_module
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    mock_cfg = mock.MagicMock()
+    mock_server = mock.MagicMock()
+    mock_server.host = "vpn-mid.example.com"
+    mock_server.port = 2222
+    mock_server.username = "awg"
+    mock_cfg.servers = {"mid": mock_server}
+    mock_cfg.timeouts.ssh_connect = 10
+    mock_cfg.timeouts.ssh_command = 30
+
+    captured = {}
+
+    mock_transport = mock.MagicMock(spec=SSHTransport)
+    mock_transport.run_awg_dump.return_value = [
+        RawPeer(
+            interface="awg0",
+            peer_endpoint="10.10.1.2:51820",
+            latest_handshake_unix=1700000001,
+            persistent_keepalive=25,
+        )
+    ]
+
+    def fake_transport(**kwargs):
+        captured.update(kwargs)
+        return mock_transport
+
+    monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
+    monkeypatch.setattr(
+        "awg_cascade_ctl.ssh.resolve_ssh_key_from_config",
+        lambda cfg, explicit_key_path=None: ("/custom/key", True),
+    )
+
+    peers = check_module.load_real_dump_target(
+        mock_cfg,
+        "mid",
+        key_path="/custom/key",
+        key_passphrase="secret",
+    )
+
+    assert len(peers) == 1
+    assert peers[0].peer_endpoint == "10.10.1.2:51820"
+    assert captured["key_path"] == "/custom/key"
+    assert captured["passphrase"] == "secret"
+    assert captured["host"] == "vpn-mid.example.com"
+
+
+def test_load_real_dump_all_passes_key_options(monkeypatch) -> None:
+    """load_real_dump_all passes key options to each target."""
+    from awg_cascade_ctl import check as check_module
+
+    captured_opts = []
+
+    def fake_load_real_dump_target(cfg, target, key_path=None, key_passphrase=None):
+        captured_opts.append({"target": target, "key_path": key_path, "key_passphrase": key_passphrase})
+        return [
+            RawPeer(
+                interface=f"awg-{target}",
+                peer_endpoint=f"10.10.1.{len(target)}:51820",
+                latest_handshake_unix=1700000000,
+                persistent_keepalive=25,
+            )
+        ]
+
+    monkeypatch.setattr("awg_cascade_ctl.check.load_real_dump_target", fake_load_real_dump_target)
+
+    mock_cfg = mock.MagicMock()
+    mock_cfg.servers = {"in": mock.MagicMock(), "mid": mock.MagicMock(), "out": mock.MagicMock()}
+
+    peers = check_module.load_real_dump_all(mock_cfg, key_path="/test/key", key_passphrase="testpass")
+
+    assert len(peers) == 3
+    assert len(captured_opts) == 3
+    assert {opt["target"] for opt in captured_opts} == {"in", "mid", "out"}
+    for opt in captured_opts:
+        assert opt["key_path"] == "/test/key"
+        assert opt["key_passphrase"] == "testpass"
