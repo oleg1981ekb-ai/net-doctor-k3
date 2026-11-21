@@ -238,6 +238,52 @@ E2E probes:
   awg-in (https://api.ipify.org): 203.0.113.42, ok=yes
 ```
 
+## 6. Exit Codes and Legacy Mode
+
+### 6.1 Exit-code schemes
+
+`awg-ctl check` and `awg-ctl diagnose` support three exit-code schemes, selected by flags:
+
+| Flag | Mode | `ok` / `green` | `warn` / `yellow` | `fail` / `red` |
+|------|------|----------------|-------------------|----------------|
+| (none) | **Nagios** (default) | 0 | 3 (`WARNING`) | 1 (`CRITICAL`) |
+| `--exit-unix` | **Unix** | 0 | 1 | 1 |
+| `--exit-unix --warn-as-ok` | **Unix + warn-as-ok** | 0 | 0 | 1 |
+
+- `--strict`: reclassifies `warn` → `fail` **before** the scheme mapping. In Nagios mode this makes `warn` exit 1 instead of 3; in Unix mode it still exits 1.
+- `--warn-as-ok` is mutually exclusive with `--strict` (usage error if both given).
+- `--legacy-until YYYY-MM-DD`: legacy mode until the date (inclusive). Prints a one-line deprecation warning to stderr on each run. After the date the flag becomes a usage error (exit 64).
+
+### 6.2 Known limitations
+
+- **Unix scheme collapses `warn` and `fail` into a single exit code (1).** To distinguish them, use the Nagios scheme (default) or `--strict` in Nagios mode.
+- **Usage errors** (invalid flags, `--legacy-until` past date, Phase 2 stubs) exit with `64` (`EX_USAGE` / `USAGE_ERROR`).
+- `schema_version` is always present in JSON output, including error envelopes.
+
+### 6.3 Examples
+
+```bash
+# Default (Nagios): warn=3, fail=1
+awg-ctl diagnose --server in --config cascade.yaml
+echo $?   # 0 / 1 / 3
+
+# Unix scheme: warn=1, fail=1 (collapse)
+awg-ctl diagnose --server in --config cascade.yaml --exit-unix
+echo $?   # 0 / 1
+
+# Unix with warn-as-ok: warn=0, fail=1
+awg-ctl diagnose --server in --config cascade.yaml --exit-unix --warn-as-ok
+echo $?   # 0 / 1
+
+# Strict: treat warn as fail
+awg-ctl diagnose --server in --config cascade.yaml --strict
+echo $?   # 0 / 1 (warn→fail→1)
+
+# Legacy mode until 2026-12-31
+awg-ctl diagnose --server in --config cascade.yaml --legacy-until 2026-12-31
+# stderr: [legacy] awg-ctl legacy mode until 2026-12-31
+```
+
 ## 7. Related Documents
 
 - `docs/ARCHITECTURE.md` — Architecture overview, command scope, configuration section summary

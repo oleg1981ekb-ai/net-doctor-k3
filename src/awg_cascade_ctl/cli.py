@@ -28,7 +28,13 @@ from awg_cascade_ctl.diagnose import (
     format_diagnose_report_text,
     run_diagnostics,
 )
-from awg_cascade_ctl.errors import ExitCode
+from awg_cascade_ctl.errors import (
+    ExitCode,
+    is_legacy_expired,
+    parse_legacy_until,
+    resolve_exit_code_from_outcome,
+    validate_exit_flags,
+)
 from awg_cascade_ctl.ssh import SSHTransport
 
 try:
@@ -223,6 +229,9 @@ def _run_check(
     key_path: str | None = None,
     key_passphrase: str | None = None,
     ask_pass: bool = False,
+    unix: bool = False,
+    warn_as_ok: bool = False,
+    strict: bool = False,
 ) -> int:
     """Run check and return exit code. Used by both CLI menu and `check` command.
 
@@ -304,13 +313,19 @@ def _run_check(
     else:
         typer.echo(format_report_text(report, use_color=use_color))
 
-    # Map status -> exit code
-    if report.status == "pass":
-        return ExitCode.OK.value
-    elif report.status == "warning":
-        return ExitCode.WARNING.value
-    else:
-        return ExitCode.CRITICAL.value
+    if unix:
+        typer.echo(
+            "[unix] warn and fail are indistinguishable (exit 1)",
+            err=True,
+        )
+
+    # Map status -> exit code via the shared exit-code resolver
+    return resolve_exit_code_from_outcome(
+        report.status,
+        unix=unix,
+        warn_as_ok=warn_as_ok,
+        strict=strict,
+    )
 
 
 @app.command(name="version")
@@ -363,8 +378,31 @@ def check(
         "--ask-pass",
         help="Prompt interactively for passphrase when key is encrypted (CI/non-interactive use SSH_KEY_PASSPHRASE env).",
     ),
+    unix: bool = typer.Option(
+        False,
+        "--exit-unix",
+        help="Use unix exit scheme (OK=0, fail/warn=1 unless --warn-as-ok).",
+    ),
+    warn_as_ok: bool = typer.Option(
+        False,
+        "--warn-as-ok",
+        help="In --exit-unix mode, treat warn as OK (exit 0). Opt-in.",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Map warns to fail before computing the exit code.",
+    ),
 ) -> None:
     """Run cascade check and E2E probe."""
+    # Mutually exclusive: --strict and --warn-as-ok cannot both be set.
+    usage_error = validate_exit_flags(strict, warn_as_ok)
+    if usage_error is not None:
+        typer.echo(
+            "awg-ctl: --strict and --warn-as-ok are mutually exclusive",
+            err=True,
+        )
+        raise typer.Exit(code=usage_error)
     config_path, dump_file, resolved_target = _resolve_check_source(config_path, dump_file)
     final_target = server_target or resolved_target
 
@@ -382,6 +420,9 @@ def check(
         key_path=key_path,
         key_passphrase=effective_passphrase,
         ask_pass=ask_pass,
+        unix=unix,
+        warn_as_ok=warn_as_ok,
+        strict=strict,
     )
     raise typer.Exit(code=exit_code)
 
@@ -412,6 +453,10 @@ def _run_diagnose(
     key_path: str | None = None,
     key_passphrase: str | None = None,
     ask_pass: bool = True,
+    unix: bool = False,
+    warn_as_ok: bool = False,
+    strict: bool = False,
+    legacy_until: str | None = None,
 ) -> int:
     """Run diagnose checks against a server via SSH.
 
@@ -500,9 +545,18 @@ def _run_diagnose(
     else:
         typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
 
-    if report.verdict == "red":
-        return ExitCode.CRITICAL.value
-    return ExitCode.OK.value
+    if unix:
+        typer.echo(
+            "[unix] warn and fail are indistinguishable (exit 1)",
+            err=True,
+        )
+
+    return resolve_exit_code_from_outcome(
+        report.verdict,
+        unix=unix,
+        warn_as_ok=warn_as_ok,
+        strict=strict,
+    )
 
 
 @app.command(name="diagnose")
@@ -539,9 +593,73 @@ def diagnose(
         "--details",
         help="Include detailed check output (for debug).",
     ),
+    unix: bool = typer.Option(
+        False,
+        "--exit-unix",
+        help="Use unix exit scheme (OK=0, fail/warn=1 unless --warn-as-ok).",
+    ),
+    warn_as_ok: bool = typer.Option(
+        False,
+        "--warn-as-ok",
+        help="In --exit-unix mode, treat warn as OK (exit 0). Opt-in.",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Map warns to fail before computing the exit code.",
+    ),
+    legacy_until: str | None = typer.Option(
+        None,
+        "--legacy-until",
+        help="Deprecated legacy mode until YYYY-MM-DD; usage error after the date.",
+    ),
+    key_path: str | None = typer.Option(
+        None,
+        "--key-path",
+        help="Path to SSH private key file (overrides agent/config auto-detect).",
+    ),
+    key_passphrase: str | None = typer.Option(
+        None,
+        "--key-passphrase",
+        help="Passphrase for encrypted SSH key (use with --key-path; avoid if key in ssh-agent).",
+    ),
+    ask_pass: bool = typer.Option(
+        True,
+        "--ask-pass",
+        help="Prompt interactively for passphrase when key is encrypted.",
+    ),
 ) -> None:
     """Run read-only diagnostics for a cascade server."""
     check_names = [c.strip() for c in checks.split(",") if c.strip()]
+
+    # Mutually exclusive flags: --strict and --warn-as-ok cannot both be set.
+    usage_error = validate_exit_flags(strict, warn_as_ok)
+    if usage_error is not None:
+        typer.echo(
+            "awg-ctl: --strict and --warn-as-ok are mutually exclusive",
+            err=True,
+        )
+        raise typer.Exit(code=usage_error)
+
+    # Legacy-until date check: if the date has passed, reject usage.
+    legacy_until_date: str | None = None
+    if legacy_until is not None:
+        try:
+            parsed = parse_legacy_until(legacy_until)
+        except ValueError:
+            typer.echo(
+                "ERROR: --legacy-until requires YYYY-MM-DD format",
+                err=True,
+            )
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+        if is_legacy_expired(parsed):
+            typer.echo(
+                f"ERROR: --legacy-until date {legacy_until} has passed",
+                err=True,
+            )
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+        legacy_until_date = legacy_until
+
     exit_code = _run_diagnose(
         config_path=config_path,
         server=server,
@@ -549,6 +667,13 @@ def diagnose(
         color=color,
         json_output=json_output,
         details=details,
+        key_path=key_path,
+        key_passphrase=key_passphrase,
+        ask_pass=ask_pass,
+        unix=unix,
+        warn_as_ok=warn_as_ok,
+        strict=strict,
+        legacy_until=legacy_until_date,
     )
     raise typer.Exit(code=exit_code)
 

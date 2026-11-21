@@ -358,6 +358,8 @@ def run_diagnostics(
 def diagnose_report_to_json(report: DiagnoseReport) -> str:
     """Serialize a diagnose report to strict JSON."""
     payload = {
+        "schema_id": SCHEMA_ID,
+        "schema_version": SCHEMA_VERSION,
         "server": report.server,
         "server_ip": report.server_ip,
         "timestamp": report.timestamp,
@@ -383,6 +385,8 @@ def diagnose_report_schema() -> dict:
         "title": "awg-ctl diagnose report",
         "type": "object",
         "properties": {
+            "schema_id": {"type": "string"},
+            "schema_version": {"type": "string"},
             "server": {"type": "string"},
             "server_ip": {"type": "string"},
             "timestamp": {"type": "string"},
