@@ -1,5 +1,6 @@
 """awg-ctl CLI entry point."""
 
+import contextlib
 import json
 import os
 import select
@@ -401,6 +402,96 @@ def schema(
         typer.echo(f"```json\n{json.dumps(schema_obj, indent=2)}\n```")
 
 
+def _run_diagnose(
+    config_path: str | None,
+    server: str,
+    checks: list[str],
+    color: str,
+    json_output: bool,
+    details: bool,
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
+    ask_pass: bool = True,
+) -> int:
+    """Run diagnose checks against a server via SSH.
+
+    Connects to SSH, prompts for passphrase interactively if key is encrypted,
+    runs checks on one connection, prints report, returns exit code.
+    """
+    from awg_cascade_ctl.ssh import resolve_ssh_key_from_config
+
+    if server not in ("in", "mid", "out"):
+        typer.echo(f"ERROR: invalid server: {server}", err=True)
+        return ExitCode.USAGE_ERROR.value
+
+    cfg = CascadeConfig.load(config_path) if config_path else CascadeConfig(
+        servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
+        network=None,  # type: ignore[arg-type]
+        ports=None,  # type: ignore[arg-type]
+        scripts=None,  # type: ignore[arg-type]
+        timeouts=None,  # type: ignore[arg-type]
+    )
+
+    server_cfg = cfg.servers.get(server)
+    if server_cfg is None or server_cfg.host is None:
+        typer.echo(f"ERROR: server {server} not found in cascade config", err=True)
+        return ExitCode.USAGE_ERROR.value
+
+    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+
+    effective_passphrase = key_passphrase
+    if effective_passphrase is None:
+        effective_passphrase = os.environ.get("SSH_KEY_PASSPHRASE")
+
+    transport = SSHTransport(
+        host=server_cfg.host,
+        port=server_cfg.port,
+        user=server_cfg.username,
+        key_path=resolved_key,
+        passphrase=effective_passphrase,
+        connect_timeout=cfg.timeouts.ssh_connect,
+        command_timeout=cfg.timeouts.ssh_command,
+    )
+
+    try:
+        try:
+            transport.connect()
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+            if encrypted_err and ask_pass and sys.stdin.isatty():
+                try:
+                    from typer import prompt as typer_prompt
+
+                    new_pass = typer_prompt("SSH key passphrase (hidden)", hide_input=True)
+                    transport.passphrase = new_pass
+                    transport.connect()
+                except (KeyboardInterrupt, EOFError):
+                    typer.echo("\nAborted.", err=True)
+                    return ExitCode.USAGE_ERROR.value
+            else:
+                raise
+        report = run_diagnostics(
+            transport=transport,
+            server=server,
+            checks=checks,
+            server_ip=server_cfg.host or "",
+        )
+    finally:
+        contextlib.suppress(Exception)
+        transport.close()
+
+    use_color = _use_color(color)
+    if json_output:
+        typer.echo(diagnose_report_to_json(report))
+    else:
+        typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
+
+    if report.verdict == "red":
+        return ExitCode.CRITICAL.value
+    return ExitCode.OK.value
+
+
 @app.command(name="diagnose")
 def diagnose(
     config_path: str | None = typer.Option(
@@ -438,55 +529,15 @@ def diagnose(
 ) -> None:
     """Run read-only diagnostics for a cascade server."""
     check_names = [c.strip() for c in checks.split(",") if c.strip()]
-    if server not in ("in", "mid", "out"):
-        typer.echo(f"ERROR: invalid server: {server}", err=True)
-        raise typer.Exit(code=ExitCode.USAGE_ERROR)
-
-    from awg_cascade_ctl.config import CascadeConfig
-
-    cfg = CascadeConfig.load(config_path) if config_path else CascadeConfig(
-        servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
-        network=None,  # type: ignore[arg-type]
-        ports=None,  # type: ignore[arg-type]
-        scripts=None,  # type: ignore[arg-type]
-        timeouts=None,  # type: ignore[arg-type]
-    )
-
-    server_cfg = cfg.servers.get(server)
-    if server_cfg is None or server_cfg.host is None:
-        typer.echo(f"ERROR: server {server} not found in cascade config", err=True)
-        raise typer.Exit(code=ExitCode.USAGE_ERROR)
-
-    from awg_cascade_ctl.ssh import resolve_ssh_key_from_config
-
-    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=None)
-
-    transport = SSHTransport(
-        host=server_cfg.host,
-        port=server_cfg.port,
-        user=server_cfg.username,
-        key_path=resolved_key,
-        passphrase=os.environ.get("SSH_KEY_PASSPHRASE"),
-        connect_timeout=cfg.timeouts.ssh_connect,
-        command_timeout=cfg.timeouts.ssh_command,
-    )
-
-    report = run_diagnostics(
-        transport=transport,
+    exit_code = _run_diagnose(
+        config_path=config_path,
         server=server,
         checks=check_names,
-        server_ip=server_cfg.host or "",
+        color=color,
+        json_output=json_output,
+        details=details,
     )
-
-    use_color = _use_color(color)
-    if json_output:
-        typer.echo(diagnose_report_to_json(report))
-    else:
-        typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
-
-    if report.verdict == "red":
-        raise typer.Exit(code=ExitCode.CRITICAL.value)
-    raise typer.Exit(code=ExitCode.OK.value)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command(name="deploy")
@@ -612,6 +663,7 @@ def menu(
 
     choices = [
         "check        — Run cascade check and E2E probe",
+        "diagnose     — Run full diagnostic report (tunnel/service/routes/logs)",
         "clients      — Manage clients (Phase 2 stub)",
         "swap-exit    — Swap exit node (Phase 2 stub)",
         "test-failover — Test failover (Phase 2 stub)",
@@ -640,6 +692,21 @@ def menu(
             config_path=resolved_config,
             dump_file=resolved_dump,
             server_target=resolved_target,
+            key_path=key_path,
+            key_passphrase=key_passphrase,
+            ask_pass=ask_pass,
+        )
+        raise typer.Exit(code=exit_code)
+
+    if cmd == "diagnose":
+        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        exit_code = _run_diagnose(
+            config_path=resolved_config,
+            server=resolved_target,
+            checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
+            color="auto",
+            json_output=False,
+            details=False,
             key_path=key_path,
             key_passphrase=key_passphrase,
             ask_pass=ask_pass,
