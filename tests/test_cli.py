@@ -104,7 +104,7 @@ def test_menu_tty_runs_check(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "check        \u2014 Run cascade check and E2E probe"
+    mock_select.return_value.ask.return_value = "Peers        \u2014 Peer state check + E2E probe (handshake/keepalive/transfer)"
     monkeypatch.setattr(questionary, "select", mock_select)
 
     result = runner.invoke(app, ["menu"])
@@ -123,7 +123,7 @@ def test_menu_phase2_stub_exits_64(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "clients      — Manage clients (Phase 2 stub)"
+    mock_select.return_value.ask.return_value = "Clients      — Manage clients (Phase 2 stub)"
     monkeypatch.setattr(questionary, "select", mock_select)
 
     result = runner.invoke(app, ["menu"])
@@ -217,7 +217,7 @@ def test_menu_with_config(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "check        — Run cascade check and E2E probe"
+    mock_select.return_value.ask.return_value = "Peers        — Peer state check + E2E probe (handshake/keepalive/transfer)"
     monkeypatch.setattr(questionary, "select", mock_select)
 
     # Mock _run_check to capture args

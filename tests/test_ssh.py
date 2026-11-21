@@ -1,14 +1,17 @@
 """Tests for the SSH layer of awg-ctl."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from paramiko import PasswordRequiredException, SSHException
 from paramiko.client import RejectPolicy
+from paramiko.pkey import PKey
 
 from awg_cascade_ctl.errors import ExitCode
 from awg_cascade_ctl.ssh import (
     DEFAULT_COMMAND_TIMEOUT,
     DEFAULT_CONNECT_TIMEOUT,
     SSHTransport,
+    _key_needs_passphrase,
     resolve_exit_code,
 )
 
@@ -66,3 +69,39 @@ def test_resolve_exit_code_no_error() -> None:
 def test_resolve_exit_code_ssh_error() -> None:
     """SSH/transport error -> CRITICAL."""
     assert resolve_exit_code(RuntimeError("boom")) == ExitCode.CRITICAL.value
+
+
+def test_key_needs_passphrase_encrypted_raises_password_required() -> None:
+    """_key_needs_passphrase returns True when PKey.from_path raises PasswordRequiredException."""
+    with patch.object(PKey, "from_path", side_effect=PasswordRequiredException("encrypted")):
+        assert _key_needs_passphrase("/fake/key") is True
+
+
+def test_key_needs_passphrase_encrypted_typeerror_password() -> None:
+    """_key_needs_passphrase returns True when PKey.from_path raises TypeError mentioning password."""
+    with patch.object(PKey, "from_path", side_effect=TypeError("Key is password-protected, but password was not provided.")):
+        assert _key_needs_passphrase("/fake/key") is True
+
+
+def test_key_needs_passphrase_typeerror_other() -> None:
+    """_key_needs_passphrase returns False for unrelated TypeError."""
+    with patch.object(PKey, "from_path", side_effect=TypeError("some other error")):
+        assert _key_needs_passphrase("/fake/key") is False
+
+
+def test_key_needs_passphrase_unencrypted() -> None:
+    """_key_needs_passphrase returns False when PKey.from_path succeeds."""
+    with patch.object(PKey, "from_path", return_value=MagicMock()):
+        assert _key_needs_passphrase("/fake/key") is False
+
+
+def test_key_needs_passphrase_ssh_exception() -> None:
+    """_key_needs_passphrase returns False on SSHException (unknown key type)."""
+    with patch.object(PKey, "from_path", side_effect=SSHException("not a valid private key")):
+        assert _key_needs_passphrase("/fake/key") is False
+
+
+def test_key_needs_passphrase_os_error() -> None:
+    """_key_needs_passphrase returns False on OSError (file not readable)."""
+    with patch.object(PKey, "from_path", side_effect=OSError("permission denied")):
+        assert _key_needs_passphrase("/fake/key") is False

@@ -1,5 +1,6 @@
 """awg-ctl CLI entry point."""
 
+import contextlib
 import json
 import os
 import select
@@ -22,7 +23,13 @@ from awg_cascade_ctl.check import (
     report_to_json,
 )
 from awg_cascade_ctl.config import CascadeConfig
+from awg_cascade_ctl.diagnose import (
+    diagnose_report_to_json,
+    format_diagnose_report_text,
+    run_diagnostics,
+)
 from awg_cascade_ctl.errors import ExitCode
+from awg_cascade_ctl.ssh import SSHTransport
 
 try:
     import questionary
@@ -248,17 +255,29 @@ def _run_check(
     except RuntimeError as exc:
         # If SSH key is encrypted and no passphrase provided, try interactive prompt
         msg = str(exc).lower()
-        if ("passwordrequired" in msg or "encrypted" in msg) and ask_pass and sys.stdin.isatty():
+        encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+        if encrypted_err and ask_pass and sys.stdin.isatty():
             try:
                 from typer import prompt
+
                 new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
-                peers = load_real_dump(
-                    config_path=config_path,
-                    dump_file=dump_file,
-                    server_target=server_target,
-                    key_path=key_path,
-                    key_passphrase=new_pass,
-                )
+                try:
+                    peers = load_real_dump(
+                        config_path=config_path,
+                        dump_file=dump_file,
+                        server_target=server_target,
+                        key_path=key_path,
+                        key_passphrase=new_pass,
+                    )
+                except RuntimeError as retry_exc:
+                    retry_msg = str(retry_exc).lower()
+                    if "invalid key" in retry_msg or "passwordrequired" in retry_msg:
+                        typer.echo(
+                            "ERROR: неверная парольная фраза для SSH ключа",
+                            err=True,
+                        )
+                        raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                    raise
             except (KeyboardInterrupt, EOFError):
                 typer.echo("\nAborted.", err=True)
                 raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
@@ -383,6 +402,154 @@ def schema(
         typer.echo(f"```json\n{json.dumps(schema_obj, indent=2)}\n```")
 
 
+def _run_diagnose(
+    config_path: str | None,
+    server: str,
+    checks: list[str],
+    color: str,
+    json_output: bool,
+    details: bool,
+    key_path: str | None = None,
+    key_passphrase: str | None = None,
+    ask_pass: bool = True,
+) -> int:
+    """Run diagnose checks against a server via SSH.
+
+    Connects to SSH, prompts for passphrase interactively if key is encrypted,
+    runs checks on one connection, prints report, returns exit code.
+    """
+    from awg_cascade_ctl.ssh import resolve_ssh_key_from_config
+
+    if server not in ("in", "mid", "out"):
+        typer.echo(f"ERROR: invalid server: {server}", err=True)
+        return ExitCode.USAGE_ERROR.value
+
+    cfg = CascadeConfig.load(config_path) if config_path else CascadeConfig(
+        servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
+        network=None,  # type: ignore[arg-type]
+        ports=None,  # type: ignore[arg-type]
+        scripts=None,  # type: ignore[arg-type]
+        timeouts=None,  # type: ignore[arg-type]
+    )
+
+    server_cfg = cfg.servers.get(server)
+    if server_cfg is None or server_cfg.host is None:
+        typer.echo(f"ERROR: server {server} not found in cascade config", err=True)
+        return ExitCode.USAGE_ERROR.value
+
+    resolved_key, _needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+
+    effective_passphrase = key_passphrase
+    if effective_passphrase is None:
+        effective_passphrase = os.environ.get("SSH_KEY_PASSPHRASE")
+
+    transport = SSHTransport(
+        host=server_cfg.host,
+        port=server_cfg.port,
+        user=server_cfg.username,
+        key_path=resolved_key,
+        passphrase=effective_passphrase,
+        connect_timeout=cfg.timeouts.ssh_connect,
+        command_timeout=cfg.timeouts.ssh_command,
+    )
+
+    try:
+        transport.connect()
+        # Pre-flight: trigger actual SSH connection to detect encrypted key
+        try:
+            transport.run("true")
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            encrypted_err = (
+                "passwordrequired" in msg
+                or "encrypted" in msg
+                or "passphrase" in msg
+            )
+            if encrypted_err and ask_pass and sys.stdin.isatty():
+                try:
+                    from typer import prompt as typer_prompt
+
+                    new_pass = typer_prompt("SSH key passphrase (hidden)", hide_input=True)
+                except (KeyboardInterrupt, EOFError):
+                    typer.echo("\nAborted.", err=True)
+                    return ExitCode.USAGE_ERROR.value
+                transport.passphrase = new_pass
+                transport.close()
+                transport.connect()
+                transport.run("true")
+            else:
+                typer.echo(f"ERROR: SSH connection failed: {exc}", err=True)
+                return ExitCode.CRITICAL.value
+
+        report = run_diagnostics(
+            transport=transport,
+            server=server,
+            checks=checks,
+            server_ip=server_cfg.host or "",
+        )
+    finally:
+        contextlib.suppress(Exception)
+        transport.close()
+
+    use_color = _use_color(color)
+    if json_output:
+        typer.echo(diagnose_report_to_json(report))
+    else:
+        typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
+
+    if report.verdict == "red":
+        return ExitCode.CRITICAL.value
+    return ExitCode.OK.value
+
+
+@app.command(name="diagnose")
+def diagnose(
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to cascade.yaml for SSH-based real data loading.",
+    ),
+    server: str = typer.Option(
+        "in",
+        "--server",
+        "-s",
+        help="SSH target server from cascade.yaml: in, mid, out, or all.",
+    ),
+    checks: str = typer.Option(
+        "tunnel,service,versions,firewall,routes,logs,scripts",
+        "--checks",
+        help="Comma-separated list of diagnostic checks to run.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Strict JSON output; all other output is sent to stdout.",
+    ),
+    color: Literal["auto", "always", "never"] = typer.Option(
+        "auto",
+        "--color",
+        help="Force colour mode: auto (default), always, or never.",
+    ),
+    details: bool = typer.Option(
+        False,
+        "--details",
+        help="Include detailed check output (for debug).",
+    ),
+) -> None:
+    """Run read-only diagnostics for a cascade server."""
+    check_names = [c.strip() for c in checks.split(",") if c.strip()]
+    exit_code = _run_diagnose(
+        config_path=config_path,
+        server=server,
+        checks=check_names,
+        color=color,
+        json_output=json_output,
+        details=details,
+    )
+    raise typer.Exit(code=exit_code)
+
+
 @app.command(name="deploy")
 def deploy(
     dry_run: bool = typer.Option(
@@ -505,10 +672,11 @@ def menu(
         raise typer.Exit(code=ExitCode.USAGE_ERROR)
 
     choices = [
-        "check        — Run cascade check and E2E probe",
-        "clients      — Manage clients (Phase 2 stub)",
-        "swap-exit    — Swap exit node (Phase 2 stub)",
-        "test-failover — Test failover (Phase 2 stub)",
+        "Server       — Full server diagnostic (tunnel/service/routes/firewall/logs/scripts)",
+        "Peers        — Peer state check + E2E probe (handshake/keepalive/transfer)",
+        "Clients      — Manage clients (Phase 2 stub)",
+        "Swap exit    — Swap exit node (Phase 2 stub)",
+        "Test failover — Test failover (Phase 2 stub)",
     ]
 
     try:
@@ -527,7 +695,7 @@ def menu(
 
     cmd = selected.split()[0]
 
-    if cmd == "check":
+    if cmd == "Peers":
         resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
         exit_code = _run_check(
             json_output=False,
@@ -540,7 +708,22 @@ def menu(
         )
         raise typer.Exit(code=exit_code)
 
-    if cmd in ("clients", "swap-exit", "test-failover", "deploy"):
+    if cmd == "Server":
+        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        exit_code = _run_diagnose(
+            config_path=resolved_config,
+            server=resolved_target,
+            checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
+            color="auto",
+            json_output=False,
+            details=False,
+            key_path=key_path,
+            key_passphrase=key_passphrase,
+            ask_pass=ask_pass,
+        )
+        raise typer.Exit(code=exit_code)
+
+    if cmd in ("Clients", "Swap", "Test", "deploy"):
         typer.echo(
             f"ERROR: {cmd} is deferred to Phase 2 / Post-MVP (Out of Scope for v1).",
             err=True,
