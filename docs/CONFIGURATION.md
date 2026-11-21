@@ -155,7 +155,33 @@ log_level: info   # debug | info | warning | error
 chmod 600 cascade.yaml          # Config readable only by owner
 chmod 600 ~/.ssh/id_ed25519_awg # Private key
 chmod 700 ~/.ssh/               # SSH directory
+
+### 4.5 Per-server key path and passphrase
+
+Each cascade node may reference its own SSH key via `ssh_key_path`. If the key is protected by a passphrase, pass it via the `SSH_KEY_PASSPHRASE` environment variable (CI) or interactively when prompted:
+
+```yaml
+servers:
+  in:
+    host: "192.0.2.10"
+    username: "root"
+    ssh_key_path: "~/.ssh/id_ed25519_in"
+  mid:
+    host: "192.0.2.11"
+    username: "root"
+    ssh_key_path: "~/.ssh/id_ed25519_mid"
 ```
+
+```bash
+# CI / non-interactive:
+SSH_KEY_PASSPHRASE="<passphrase>" awg-ctl diagnose --server mid --config cascade.yaml
+
+# Interactive:
+awg-ctl diagnose --server mid --config cascade.yaml
+# Enter passphrase when prompted
+```
+
+SSH key passphrase takes priority: CLI `--key-passphrase` → `SSH_KEY_PASSPHRASE` env → interactive prompt.
 
 ## 5. Validation
 
