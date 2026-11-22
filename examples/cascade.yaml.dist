@@ -30,7 +30,7 @@ network:
   # MSS clamping
   mss_clamp: true
   # PersistentKeepalive for inter-server links
-  persistent_keepalive: 25
+  persistent_keepalive: 33  # Reserved; not used by `check` (see check.keepalive_min/max)
   # DNS resolvers for clients (routed via table 100 to NL)
   dns:
     - 1.1.1.1

@@ -1,9 +1,9 @@
 flowchart TD
     Start[Start awg-ctl check] --> SSH_AWG_IN[SSH awg-in: manage_amneziawg.sh check --json]
     SSH_AWG_IN -->|SSH or parse error| CRIT[CRITICAL 1]
-    SSH_AWG_IN -->|OK| AUDIT_IN[awg-in: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
-    SSH_AWG_IN -->|OK| AUDIT_MID[awg-mid: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
-    SSH_AWG_IN -->|OK| AUDIT_OUT[awg-out: awg show all dump<br/>keepalive == 25<br/>handshake < 180s]
+    SSH_AWG_IN -->|OK| AUDIT_IN[awg-in: awg show all dump<br/>keepalive in 1..33 (check.keepalive_min/max)<br/>handshake < 180s]
+    SSH_AWG_IN -->|OK| AUDIT_MID[awg-mid: awg show all dump<br/>keepalive in 1..33 (check.keepalive_min/max)<br/>handshake < 180s]
+    SSH_AWG_IN -->|OK| AUDIT_OUT[awg-out: awg show all dump<br/>keepalive in 1..33 (check.keepalive_min/max)<br/>handshake < 180s]
     AUDIT_IN -->|keepalive/handshake fail| CRIT
     AUDIT_MID -->|keepalive/handshake fail| CRIT
     AUDIT_OUT -->|keepalive/handshake fail| CRIT
