@@ -287,6 +287,7 @@ def _run_check(
     min_keepalive = KEEPALIVE_MIN
     max_keepalive = KEEPALIVE_MAX
     probe_url: str | None = None
+    cfg = None
     if config_path is not None:
         from awg_cascade_ctl.config import CascadeConfig
 
@@ -298,6 +299,20 @@ def _run_check(
         except FileNotFoundError:
             # Config missing → fall back to defaults; load_real_dump reports it.
             pass
+
+    # Peer roles: with a config and no dump file, cascade hosts classify peers
+    # as links vs clients; clients do not affect the overall ok status.
+    link_hosts: frozenset[str] | None = None
+    roles_active = False
+    if config_path is not None and dump_file is None and cfg is not None:
+        link_hosts = frozenset(
+            {
+                cfg.servers["in"].host,
+                cfg.servers["mid"].host,
+                cfg.servers["out"].host,
+            }
+        )
+        roles_active = True
 
     # Probe skip reason mirrors load_e2e_probes: it runs only for in/all with a config.
     if server_target not in ("in", "all"):
@@ -369,6 +384,7 @@ def _run_check(
         now_unix=int(time.time()),
         min_keepalive=min_keepalive,
         max_keepalive=max_keepalive,
+        link_hosts=link_hosts,
     )
     probes = load_e2e_probes(config_path=config_path, server_target=server_target)
 
@@ -377,6 +393,7 @@ def _run_check(
         links=links,
         e2e_probes=probes,
         source=source,
+        roles_active=roles_active,
     )
 
     use_color = _use_color(color)

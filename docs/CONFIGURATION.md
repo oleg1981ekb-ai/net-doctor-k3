@@ -56,7 +56,7 @@ network:
   link2_subnet: 10.10.2.0/30       # awg-mid <-> awg-out
   mtu: 1360
   mss_clamp: true
-  persistent_keepalive: 25
+  persistent_keepalive: 33  # Reserved; not used by `check` (see check.keepalive_min/max)
   dns:
     - 1.1.1.1
     - 9.9.9.9

@@ -29,7 +29,8 @@ class NetworkConfig(BaseModel):
     link2_subnet: IPv4Network
     mtu: int = Field(default=1360, ge=1280, le=9000)
     mss_clamp: bool = True
-    persistent_keepalive: int = Field(default=25, ge=0, le=120)
+    # Reserved; not used by `check` (see check.keepalive_min/max)
+    persistent_keepalive: int = Field(default=33, ge=0, le=120)
     dns: list[str] = Field(min_length=1)
     ip_checker_url: str = Field(min_length=1)
 
