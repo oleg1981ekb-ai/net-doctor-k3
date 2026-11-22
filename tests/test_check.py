@@ -673,3 +673,230 @@ def test_classify_peer_ipv6_link_host_matches_bracketed() -> None:
         allowed_ips="2001:db8::2/128",
     )
     assert classify_peer(peer, frozenset({"2001:db8::1"})) == "link"
+
+
+DUMP_LINE_LINK_ROLE = (
+    "awg1\tPUB\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t33\n"
+)
+DUMP_LINE_CLIENT_BAD = (
+    "awg1\tPUB\tPSK\t198.51.100.5:51820\t203.0.113.2/32\t1700000000\t1000\t2000\t0\n"
+)
+DUMP_LINE_CLIENT_HEALTHY = (
+    "awg1\tPUB\tPSK\t198.51.100.5:51820\t203.0.113.2/32\t1700000000\t1000\t2000\t25\n"
+)
+DUMP_LINE_LINK_BAD_KEEPALIVE = (
+    "awg1\tPUB\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t34\n"
+)
+
+
+def test_audit_peers_no_link_hosts_all_link() -> None:
+    """Without link_hosts every audit has role "link"."""
+    peers = parse_awg_dump(DUMP_LINE + DUMP_LINE_ALLOWED_DEFAULT)
+    audits = audit_peers(peers, now_unix=1700000030, link_hosts=None)
+    assert audits
+    assert all(audit.role == "link" for audit in audits)
+    audits_default = audit_peers(peers, now_unix=1700000030)
+    assert all(audit.role == "link" for audit in audits_default)
+
+
+def test_audit_peers_roles_with_link_hosts() -> None:
+    """link_hosts classifies default-route peer as link and /32 peer as client."""
+    peers = parse_awg_dump(DUMP_LINE_LINK_ROLE + DUMP_LINE_CLIENT_BAD)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    assert audits[0].role == "link"
+    assert audits[1].role == "client"
+    assert audits[0].ok is True
+    assert audits[1].ok is False
+    # Clients are ignored by build_report, not by audit_peers.
+    report = build_report("cascade", audits, [], roles_active=True)
+    assert report.ok is True
+
+
+def test_build_report_roles_active_ok() -> None:
+    """roles_active=True: healthy link + bad client -> ok True."""
+    peers = parse_awg_dump(DUMP_LINE_LINK_ROLE + DUMP_LINE_CLIENT_BAD)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    assert report.ok is True
+    assert report.status == "pass"
+
+
+def test_build_report_roles_active_link_bad() -> None:
+    """roles_active=True: bad link (keepalive 34) + healthy clients -> ok False."""
+    peers = parse_awg_dump(DUMP_LINE_LINK_BAD_KEEPALIVE + DUMP_LINE_CLIENT_HEALTHY)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    assert report.ok is False
+    assert report.status == "fail"
+
+
+def test_build_report_roles_active_all_clients() -> None:
+    """roles_active=True with only clients -> ok False, status fail."""
+    peers = parse_awg_dump(DUMP_LINE_CLIENT_HEALTHY + DUMP_LINE_CLIENT_BAD)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    assert report.ok is False
+    assert report.status == "fail"
+
+
+def test_format_report_text_client_not_counted() -> None:
+    """Client line is flagged and excluded from the N/M ok counter."""
+    peers = parse_awg_dump(DUMP_LINE_LINK_ROLE + DUMP_LINE_CLIENT_BAD)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "[client, not counted]" in text
+    assert "1/1 ok" in text
+
+
+def test_format_report_text_no_cascade_links() -> None:
+    """Only clients -> 'no cascade links found' in the Links section."""
+    peers = parse_awg_dump(DUMP_LINE_CLIENT_HEALTHY + DUMP_LINE_CLIENT_BAD)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "no cascade links found" in text
+
+
+def test_report_json_contains_role() -> None:
+    """report_to_json includes each audit's role in links[]."""
+    peers = parse_awg_dump(DUMP_LINE_LINK_ROLE + DUMP_LINE_CLIENT_HEALTHY)
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade", audits, [], roles_active=True)
+    data = json.loads(report_to_json(report))
+    assert data["links"][0]["role"] == "link"
+    assert data["links"][1]["role"] == "client"
+
+
+def test_run_check_wires_link_hosts_and_roles_active(monkeypatch, tmp_path) -> None:
+    """_run_check passes cascade hosts as link_hosts and roles_active=True.
+
+    With --config (and no --dump-file), audit_peers receives link_hosts built
+    from the three server hosts in cascade.yaml and build_report receives
+    roles_active=True. With --dump-file, link_hosts is None and roles_active
+    is False.
+    """
+    import yaml
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import (
+        RawPeer,
+    )
+    from awg_cascade_ctl.check import (
+        audit_peers as real_audit_peers,
+    )
+    from awg_cascade_ctl.check import (
+        build_report as real_build_report,
+    )
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+
+    hosts = ["203.0.113.10", "203.0.113.11", "203.0.113.12"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {"host": hosts[0], "username": "root"},
+                    "mid": {"host": hosts[1], "username": "root"},
+                    "out": {"host": hosts[2], "username": "root"},
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    def _peer(endpoint: str, keepalive: int, allowed_ips: str) -> RawPeer:
+        return RawPeer(
+            interface="awg1",
+            peer_endpoint=endpoint,
+            latest_handshake_unix=1700000000,
+            persistent_keepalive=keepalive,
+            allowed_ips=allowed_ips,
+        )
+
+    link_peer = _peer(f"{hosts[0]}:51820", 25, "0.0.0.0/0,::/0")
+    client_peer = _peer("198.51.100.5:51820", 0, "203.0.113.2/32")
+
+    def fake_load_real_dump(**kw):
+        if kw.get("dump_file"):
+            return [link_peer]
+        return [link_peer, client_peer]
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    captured: dict = {}
+
+    def fake_audit_peers(*args, **kwargs):
+        captured["audit_peers"] = kwargs
+        return real_audit_peers(*args, **kwargs)
+
+    def fake_build_report(**kwargs):
+        captured["build_report"] = kwargs
+        return real_build_report(**kwargs)
+
+    monkeypatch.setattr(cli_module, "audit_peers", fake_audit_peers)
+    monkeypatch.setattr(cli_module, "build_report", fake_build_report)
+
+    code = cli_module._run_check(json_output=True, config_path=str(cfg_path))
+    assert code == 0
+    assert captured["audit_peers"]["link_hosts"] == frozenset(
+        {"203.0.113.10", "203.0.113.11", "203.0.113.12"}
+    )
+    assert captured["build_report"]["roles_active"] is True
+
+    captured.clear()
+    dump_path = tmp_path / "dump.txt"
+    dump_path.write_text(
+        "awg1\tPUB\tPSK\t203.0.113.10:51820\t0.0.0.0/0,::/0\t"
+        "1700000000\t1000\t2000\t25\n"
+    )
+    code = cli_module._run_check(
+        json_output=True,
+        config_path=str(cfg_path),
+        dump_file=str(dump_path),
+    )
+    assert code == 0
+    assert captured["audit_peers"]["link_hosts"] is None
+    assert captured["build_report"]["roles_active"] is False

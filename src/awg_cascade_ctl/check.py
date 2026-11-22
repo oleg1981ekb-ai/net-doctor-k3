@@ -196,6 +196,7 @@ class LinkAudit(BaseModel):
     keepalive_status: Literal["OK", "OFF", "MISMATCH"] = "OK"
     keepalive_min: int | None = None
     keepalive_max: int | None = None
+    role: Literal["link", "client"] = "link"
 
 
 class E2EProbe(BaseModel):
@@ -360,6 +361,7 @@ def audit_peers(
     required_keepalive: int | None = None,
     min_keepalive: int = KEEPALIVE_MIN,
     max_keepalive: int = KEEPALIVE_MAX,
+    link_hosts: frozenset[str] | None = None,
 ) -> list[LinkAudit]:
     """Evaluate freshness and keepalive for each parsed peer."""
     audits: list[LinkAudit] = []
@@ -387,6 +389,9 @@ def audit_peers(
             keepalive_min_val = min_keepalive
             keepalive_max_val = max_keepalive
         ok = keepalive_ok and handshake_fresh
+        role: Literal["link", "client"] = (
+            "link" if link_hosts is None else classify_peer(peer, link_hosts)
+        )
         audits.append(
             LinkAudit(
                 interface=peer.interface,
@@ -399,6 +404,7 @@ def audit_peers(
                 keepalive_max=keepalive_max_val,
                 handshake_fresh=handshake_fresh,
                 ok=ok,
+                role=role,
             )
         )
     return audits
@@ -409,9 +415,18 @@ def build_report(
     links: list[LinkAudit],
     e2e_probes: list[E2EProbe],
     source: Literal["demo", "dump_file", "ssh"] = "demo",
+    roles_active: bool = False,
 ) -> CheckReport:
     """Assemble a CheckReport and compute the overall status."""
-    ok = all(link.ok for link in links) and all(probe.ok for probe in e2e_probes)
+    if roles_active:
+        link_audits = [link for link in links if link.role == "link"]
+        ok = all(link.ok for link in link_audits) and all(
+            probe.ok for probe in e2e_probes
+        )
+        if not link_audits:
+            ok = False
+    else:
+        ok = all(link.ok for link in links) and all(probe.ok for probe in e2e_probes)
     status: Literal["pass", "fail", "warning"] = "pass"
     if not ok:
         status = "fail"
@@ -510,18 +525,24 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
 
     if report.links:
         lines.append("Links:")
-        ok_count = sum(1 for link in report.links if link.ok)
-        lines.append(f"  {ok_count}/{len(report.links)} ok")
+        link_count = sum(1 for link in report.links if link.role == "link")
+        ok_count = sum(1 for link in report.links if link.role == "link" and link.ok)
+        lines.append(f"  {ok_count}/{link_count} ok")
+        if link_count == 0:
+            lines.append("no cascade links found")
         for link in report.links:
             ka_text = link.keepalive_status
             if link.keepalive_status == "MISMATCH":
                 ka_text = f"MISMATCH (got {link.persistent_keepalive}, expected {link.keepalive_min}..{link.keepalive_max})"
-            lines.append(
+            link_line = (
                 f"  {link.interface} -> {link.peer_endpoint}: "
                 f"keepalive={ka_text}, "
                 f"handshake={'fresh' if link.handshake_fresh else 'STALE'}, "
                 f"ok={'yes' if link.ok else 'no'}"
             )
+            if link.role == "client":
+                link_line += " [client, not counted]"
+            lines.append(link_line)
     else:
         lines.append("Links: 0 links")
 
