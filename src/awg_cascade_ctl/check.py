@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import subprocess
 import sys
@@ -235,6 +236,7 @@ class RawPeer:
     peer_endpoint: str
     latest_handshake_unix: int
     persistent_keepalive: int | None
+    allowed_ips: str = ""
 
 
 def parse_awg_dump(dump: str) -> list[RawPeer]:
@@ -253,6 +255,7 @@ def parse_awg_dump(dump: str) -> list[RawPeer]:
             continue
         interface = parts[0]
         endpoint = parts[3]
+        allowed_ips = parts[4]
         if ":" not in endpoint and endpoint != "(none)":
             continue
         handshake = parts[5]
@@ -273,11 +276,81 @@ def parse_awg_dump(dump: str) -> list[RawPeer]:
             RawPeer(
                 interface=interface,
                 peer_endpoint=endpoint,
+                allowed_ips=allowed_ips,
                 latest_handshake_unix=handshake_unix,
                 persistent_keepalive=keepalive_val,
             )
         )
     return peers
+
+
+def endpoint_host(endpoint: str) -> str | None:
+    """Return the host without port from a WireGuard endpoint string.
+
+    "1.2.3.4:51820" -> "1.2.3.4"; "[2001:db8::1]:51820" -> "2001:db8::1";
+    "(none)" or unparseable -> None.
+    """
+    if endpoint == "(none)":
+        return None
+    if endpoint.startswith("["):
+        end = endpoint.find("]")
+        if end == -1:
+            return None
+        host = endpoint[1:end]
+        return host if host else None
+    if ":" not in endpoint:
+        return None
+    host = endpoint.rsplit(":", 1)[0]
+    return host if host else None
+
+
+def _hosts_match(a: str, b: str) -> bool:
+    """Compare two host strings, preferring IP-aware equality when both parse as IPs."""
+    try:
+        return ipaddress.ip_address(a) == ipaddress.ip_address(b)
+    except ValueError:
+        return a == b
+
+
+def has_default_route(allowed_ips: str) -> bool:
+    """Return True if any comma-separated allowed-ips entry is a default route (prefixlen == 0).
+
+    Split on comma, strip whitespace, skip empty/"(none)"/invalid entries via ipaddress.ip_network(strict=False)
+    catching ValueError, return True if any prefixlen == 0. Invalid entries and "(none)" ignored without exceptions.
+    Empty string -> False.
+    """
+    for entry in allowed_ips.split(","):
+        entry = entry.strip()
+        if not entry or entry == "(none)":
+            continue
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            continue
+        if network.prefixlen == 0:
+            return True
+    return False
+
+
+def classify_peer(
+    peer: RawPeer, link_hosts: frozenset[str]
+) -> Literal["link", "client"]:
+    """Classify a peer as a cascade link or a client.
+
+    Returns "link" if has_default_route(peer.allowed_ips) OR
+    endpoint_host(peer.peer_endpoint) is in link_hosts; else "client".
+    If both sides are IP addresses, compare via ipaddress.ip_address;
+    otherwise compare plain strings.
+    """
+    if has_default_route(peer.allowed_ips):
+        return "link"
+    host = endpoint_host(peer.peer_endpoint)
+    if host is None:
+        return "client"
+    for link_host in link_hosts:
+        if _hosts_match(host, link_host):
+            return "link"
+    return "client"
 
 
 def audit_peers(

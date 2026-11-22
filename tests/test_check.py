@@ -4,10 +4,14 @@ import json
 
 from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
+    RawPeer,
     audit_peers,
     build_report,
+    classify_peer,
     describe_check_plan,
+    endpoint_host,
     format_report_text,
+    has_default_route,
     parse_awg_dump,
     report_schema,
     report_to_json,
@@ -541,3 +545,131 @@ def test_check_intro_suppressed_when_should_show_false(monkeypatch) -> None:
     monkeypatch.setattr(cli_module, "_should_show_intro", lambda json_output: False)
     result = CliRunner().invoke(cli_module.app, ["check"])
     assert "DEMO DATA" not in result.stderr
+
+
+DUMP_LINE_ALLOWED_DEFAULT = (
+    "awg1\tPUB\tPSK\t198.51.100.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t25\n"
+)
+
+DUMP_LINE_ALLOWED_HOST_ROUTE = (
+    "awg1\tPUB\tPSK\t198.51.100.5:51820\t172.16.17.2/32\t1700000000\t1000\t2000\t25\n"
+)
+
+
+def test_parse_awg_dump_fills_allowed_ips() -> None:
+    """parse_awg_dump fills RawPeer.allowed_ips from parts[4]."""
+    peers = parse_awg_dump(DUMP_LINE_ALLOWED_DEFAULT + DUMP_LINE_ALLOWED_HOST_ROUTE)
+    assert len(peers) == 2
+    assert peers[0].allowed_ips == "0.0.0.0/0,::/0"
+    assert peers[1].allowed_ips == "172.16.17.2/32"
+
+
+def test_endpoint_host_ipv4_strips_port() -> None:
+    """IPv4 endpoint -> host without port."""
+    assert endpoint_host("1.2.3.4:51820") == "1.2.3.4"
+
+
+def test_endpoint_host_ipv6_bracketed_strips_port() -> None:
+    """Bracketed IPv6 endpoint -> host without brackets or port."""
+    assert endpoint_host("[2001:db8::1]:51820") == "2001:db8::1"
+
+
+def test_endpoint_host_none_endpoint() -> None:
+    """'(none)' endpoint -> None."""
+    assert endpoint_host("(none)") is None
+
+
+def test_endpoint_host_garbage() -> None:
+    """Unparseable endpoint -> None."""
+    assert endpoint_host("garbage") is None
+
+
+def test_has_default_route_full() -> None:
+    """Default route (both families) -> True."""
+    assert has_default_route("0.0.0.0/0,::/0") is True
+
+
+def test_has_default_route_ipv6_default() -> None:
+    """IPv6 default route -> True."""
+    assert has_default_route("::/0") is True
+
+
+def test_has_default_route_host_route() -> None:
+    """Single-host route is not a default route -> False."""
+    assert has_default_route("172.16.17.2/32") is False
+
+
+def test_has_default_route_private_subnet() -> None:
+    """Subnet without default prefix is not a default route -> False."""
+    assert has_default_route("10.0.0.0/8,172.16.17.2/32") is False
+
+
+def test_has_default_route_none_and_empty() -> None:
+    """'(none)' and empty string are not default routes -> False."""
+    assert has_default_route("(none)") is False
+    assert has_default_route("") is False
+
+
+def test_has_default_route_garbage_then_default() -> None:
+    """Invalid entry skipped, default route still detected -> True."""
+    assert has_default_route("garbage,0.0.0.0/0") is True
+
+
+def test_classify_peer_default_route_is_link() -> None:
+    """Default route -> link even with unknown endpoint."""
+    peer = RawPeer(
+        interface="awg1",
+        peer_endpoint="198.51.100.99:51820",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=25,
+        allowed_ips="0.0.0.0/0,::/0",
+    )
+    assert classify_peer(peer, frozenset()) == "link"
+
+
+def test_classify_peer_endpoint_match_is_link() -> None:
+    """Endpoint host equals a link_host -> link even with /32 allowed-ips."""
+    peer = RawPeer(
+        interface="awg1",
+        peer_endpoint="203.0.113.1:51820",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=25,
+        allowed_ips="203.0.113.2/32",
+    )
+    assert classify_peer(peer, frozenset({"203.0.113.1"})) == "link"
+
+
+def test_classify_peer_host_route_foreign_endpoint_is_client() -> None:
+    """/32 allowed-ips with foreign endpoint -> client."""
+    peer = RawPeer(
+        interface="awg1",
+        peer_endpoint="198.51.100.5:51820",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=25,
+        allowed_ips="203.0.113.2/32",
+    )
+    assert classify_peer(peer, frozenset({"203.0.113.1"})) == "client"
+
+
+def test_classify_peer_none_endpoint_with_none_allowed_ips_is_client() -> None:
+    """'(none)' in endpoint AND allowed-ips -> client."""
+    peer = RawPeer(
+        interface="awg1",
+        peer_endpoint="(none)",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=25,
+        allowed_ips="(none)",
+    )
+    assert classify_peer(peer, frozenset()) == "client"
+
+
+def test_classify_peer_ipv6_link_host_matches_bracketed() -> None:
+    """IPv6 link_host matches bracketed endpoint -> link."""
+    peer = RawPeer(
+        interface="awg1",
+        peer_endpoint="[2001:db8::1]:51820",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=25,
+        allowed_ips="2001:db8::2/128",
+    )
+    assert classify_peer(peer, frozenset({"2001:db8::1"})) == "link"
