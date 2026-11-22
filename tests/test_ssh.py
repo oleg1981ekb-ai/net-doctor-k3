@@ -73,13 +73,21 @@ def test_resolve_exit_code_ssh_error() -> None:
 
 def test_key_needs_passphrase_encrypted_raises_password_required() -> None:
     """_key_needs_passphrase returns True when PKey.from_path raises PasswordRequiredException."""
-    with patch.object(PKey, "from_path", side_effect=PasswordRequiredException("encrypted")):
+    with patch.object(
+        PKey, "from_path", side_effect=PasswordRequiredException("encrypted")
+    ):
         assert _key_needs_passphrase("/fake/key") is True
 
 
 def test_key_needs_passphrase_encrypted_typeerror_password() -> None:
     """_key_needs_passphrase returns True when PKey.from_path raises TypeError mentioning password."""
-    with patch.object(PKey, "from_path", side_effect=TypeError("Key is password-protected, but password was not provided.")):
+    with patch.object(
+        PKey,
+        "from_path",
+        side_effect=TypeError(
+            "Key is password-protected, but password was not provided."
+        ),
+    ):
         assert _key_needs_passphrase("/fake/key") is True
 
 
@@ -97,7 +105,9 @@ def test_key_needs_passphrase_unencrypted() -> None:
 
 def test_key_needs_passphrase_ssh_exception() -> None:
     """_key_needs_passphrase returns False on SSHException (unknown key type)."""
-    with patch.object(PKey, "from_path", side_effect=SSHException("not a valid private key")):
+    with patch.object(
+        PKey, "from_path", side_effect=SSHException("not a valid private key")
+    ):
         assert _key_needs_passphrase("/fake/key") is False
 
 

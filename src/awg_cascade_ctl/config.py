@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ServerConfig(BaseModel):
@@ -77,6 +77,21 @@ class TimeoutsConfig(BaseModel):
     check: int = Field(default=60, gt=0)
 
 
+class CheckConfig(BaseModel):
+    """Allowed keepalive range for the check command."""
+
+    model_config = ConfigDict(frozen=True)
+
+    keepalive_min: int = Field(default=1, ge=1, le=120)
+    keepalive_max: int = Field(default=33, ge=0, le=120)
+
+    @model_validator(mode="after")
+    def _check_keepalive_range(self) -> "CheckConfig":
+        if self.keepalive_min > self.keepalive_max:
+            raise ValueError("keepalive_min must be <= keepalive_max")
+        return self
+
+
 class CascadeConfig(BaseModel):
     """Root configuration model for awg-ctl cascade."""
 
@@ -88,6 +103,7 @@ class CascadeConfig(BaseModel):
     ports: PortsConfig
     scripts: ScriptsConfig = Field(default_factory=lambda: ScriptsConfig())
     timeouts: TimeoutsConfig = Field(default_factory=lambda: TimeoutsConfig())
+    check: CheckConfig = Field(default_factory=lambda: CheckConfig())
     log_level: Literal["debug", "info", "warning", "error"] = "info"
 
     @staticmethod
@@ -114,6 +130,4 @@ class CascadeConfig(BaseModel):
         for i, a in enumerate(subnets):
             for j, b in enumerate(subnets[i + 1 :], start=i + 1):
                 if a.overlaps(b):
-                    raise ValueError(
-                        f"Subnets {a} and {b} overlap"
-                    )
+                    raise ValueError(f"Subnets {a} and {b} overlap")

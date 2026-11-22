@@ -32,7 +32,9 @@ def redact_dict(data: dict) -> dict:
     """Return a copy of the dict with sensitive fields masked."""
     redacted = {}
     for key, value in data.items():
-        if key in SENSITIVE_FIELDS or key.lower() in {f.lower() for f in SENSITIVE_FIELDS}:
+        if key in SENSITIVE_FIELDS or key.lower() in {
+            f.lower() for f in SENSITIVE_FIELDS
+        }:
             redacted[key] = REDACTED
         elif isinstance(value, dict):
             redacted[key] = redact_dict(value)

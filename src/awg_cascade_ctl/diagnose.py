@@ -143,7 +143,9 @@ def check_service(transport: Any, server: str = "in") -> CheckResult:
             action=None,
             details={"output": outcome.output},
         )
-    status: CheckStatus = "pass" if outcome.output.strip().lower() == "active" else "fail"
+    status: CheckStatus = (
+        "pass" if outcome.output.strip().lower() == "active" else "fail"
+    )
     summary = (
         "Сервис awg-quick@awg0 активен"
         if status == "pass"
@@ -172,11 +174,15 @@ def check_versions(transport: Any, server: str = "in") -> CheckResult:
             action=None,
             details={"output": outcome.output},
         )
-    version_output = outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    version_output = (
+        outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    )
     return CheckResult(
         check="versions",
         status="pass" if not outcome.failed and version_output else "fail",
-        summary=f"awg-tools {version_output}" if version_output else "Версии не получены",
+        summary=f"awg-tools {version_output}"
+        if version_output
+        else "Версии не получены",
         action=None,
         details={"awg_version": version_output},
     )
@@ -195,7 +201,9 @@ def check_firewall(transport: Any, server: str = "in") -> CheckResult:
             action=None,
             details={"output": outcome.output},
         )
-    firewall_output = outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    firewall_output = (
+        outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    )
     status: CheckStatus = "pass" if (not outcome.failed and firewall_output) else "warn"
     return CheckResult(
         check="firewall",
@@ -206,7 +214,9 @@ def check_firewall(transport: Any, server: str = "in") -> CheckResult:
     )
 
 
-def check_routes(transport: Any, server: str = "in", client_subnet: str = "10.9.9.0/24") -> CheckResult:
+def check_routes(
+    transport: Any, server: str = "in", client_subnet: str = "10.9.9.0/24"
+) -> CheckResult:
     """Check routing via `iptables -t nat -S POSTROUTING`, fallback `nft list ruleset`."""
     outcome = _exec(transport, "iptables -t nat -S POSTROUTING")
     if outcome.error is not None:
@@ -219,7 +229,9 @@ def check_routes(transport: Any, server: str = "in", client_subnet: str = "10.9.
             action=None,
             details={"output": outcome.output},
         )
-    routes_output = outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    routes_output = (
+        outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    )
     status: CheckStatus = "pass" if (not outcome.failed and routes_output) else "warn"
     summary = (
         f"NAT MASQUERADE для {client_subnet} настроен"
@@ -248,10 +260,18 @@ def check_logs(transport: Any, server: str = "in") -> CheckResult:
             action=None,
             details={"output": outcome.output},
         )
-    logs_output = outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    logs_output = (
+        outcome.output.strip() if not outcome.failed else f"error: {outcome.output}"
+    )
     has_errors = (
-        "error" in logs_output.lower() or "fail" in logs_output.lower() or "failed" in logs_output.lower()
-    ) and "no error" not in logs_output.lower() and "no errors" not in logs_output.lower()
+        (
+            "error" in logs_output.lower()
+            or "fail" in logs_output.lower()
+            or "failed" in logs_output.lower()
+        )
+        and "no error" not in logs_output.lower()
+        and "no errors" not in logs_output.lower()
+    )
     status: CheckStatus = "warn" if has_errors else "pass"
     return CheckResult(
         check="logs",
@@ -403,7 +423,10 @@ def diagnose_report_schema() -> dict:
                         },
                         "summary": {"type": "string"},
                         "action": {"type": ["string", "null"]},
-                        "details": {"type": "object", "additionalProperties": {"type": "string"}},
+                        "details": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                        },
                     },
                 },
             },
@@ -411,15 +434,23 @@ def diagnose_report_schema() -> dict:
     }
 
 
-def format_diagnose_report_text(report: DiagnoseReport, use_color: bool = False, show_details: bool = False) -> str:
+def format_diagnose_report_text(
+    report: DiagnoseReport, use_color: bool = False, show_details: bool = False
+) -> str:
     """Format a diagnose report as beautiful boxed text with emojis."""
     # Verdict text and color
-    verdict_text = {"green": "ВСЁ РАБОТАЕТ", "yellow": "ЕСТЬ ЗАМЕЧАНИЯ", "red": "ТРЕБУЕТ ВНИМАНИЯ"}[report.verdict]
+    verdict_text = {
+        "green": "ВСЁ РАБОТАЕТ",
+        "yellow": "ЕСТЬ ЗАМЕЧАНИЯ",
+        "red": "ТРЕБУЕТ ВНИМАНИЯ",
+    }[report.verdict]
     verdict_color = {"green": "green", "yellow": "yellow", "red": "red"}[report.verdict]
 
     # Build header box
     header = f" VPN СЕРВЕР {report.server.upper()} — {verdict_text} "
-    sub_header = f" Проверено: {report.timestamp}  |  Сервер: {report.server_ip or '—'} "
+    sub_header = (
+        f" Проверено: {report.timestamp}  |  Сервер: {report.server_ip or '—'} "
+    )
     max_width = max(len(header), len(sub_header)) + 2
     max_width = max(max_width, 70)
 
@@ -451,8 +482,15 @@ def format_diagnose_report_text(report: DiagnoseReport, use_color: bool = False,
     lines.append("Checks:")
     for r in report.results:
         emoji = check_emoji.get(r.status, "❓")
-        status_text = {"pass": "PASS", "fail": "FAIL", "warn": "WARN", "skip": "SKIP"}[r.status]
-        status_color = {"pass": "green", "fail": "red", "warn": "yellow", "skip": "yellow"}[r.status]
+        status_text = {"pass": "PASS", "fail": "FAIL", "warn": "WARN", "skip": "SKIP"}[
+            r.status
+        ]
+        status_color = {
+            "pass": "green",
+            "fail": "red",
+            "warn": "yellow",
+            "skip": "yellow",
+        }[r.status]
         colored_status = _paint(status_text, status_color, use_color)
         lines.append(f"  {emoji} {r.check:<12} — {colored_status} — {r.summary}")
         if r.action:
@@ -469,7 +507,9 @@ def format_diagnose_report_text(report: DiagnoseReport, use_color: bool = False,
                 for key, value in r.details.items():
                     if value:
                         # Truncate long outputs
-                        display_value = value[:500] + "..." if len(value) > 500 else value
+                        display_value = (
+                            value[:500] + "..." if len(value) > 500 else value
+                        )
                         detail_lines.append(f"    {key}: {display_value}")
         if detail_lines:
             lines.append("Details:")
