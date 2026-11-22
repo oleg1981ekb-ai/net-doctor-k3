@@ -108,7 +108,22 @@ timeouts:
   check: 60
 ```
 
-### 3.7 `log_level` — Logging
+### 3.7 `check` — Peer Keepalive Validation
+
+Defines the allowed persistent-keepalive range for the `check` command. Peers with `persistent_keepalive` outside this range are flagged as `MISMATCH`.
+
+```yaml
+check:
+  keepalive_min: 1    # minimum allowed keepalive (default: 1)
+  keepalive_max: 33   # maximum allowed keepalive (default: 33)
+```
+
+- `keepalive_min`: Minimum allowed persistent keepalive in seconds. Must be >= 1 and <= 120.
+- `keepalive_max`: Maximum allowed persistent keepalive in seconds. Must be >= 0 and <= 120.
+- `keepalive_min` must be <= `keepalive_max`, otherwise a `ValueError` is raised.
+- Peers with `persistent_keepalive` of 0 or "off" are always flagged as `OFF` regardless of range.
+
+### 3.8 `log_level` — Logging
 
 ```yaml
 log_level: info   # debug | info | warning | error
@@ -297,3 +312,7 @@ awg-ctl diagnose --server in --config cascade.yaml --legacy-until 2026-12-31
 - Never commit `cascade.yaml` to version control (see `.gitignore`).
 - RejectPolicy host key verification prevents man-in-the-middle during SSH connections.
 - All remote commands via `SSHTransport` are redacted for secrets before transmission/logging.
+
+### Check intro
+
+Before running, `awg-ctl check` prints a short plan to **stderr** describing the data source, the handshake/keepalive thresholds, the E2E probe URL, and what is not checked. The intro is suppressed under `--json` and when stderr is not a terminal.

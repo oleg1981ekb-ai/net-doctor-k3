@@ -6,6 +6,7 @@ from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
     audit_peers,
     build_report,
+    describe_check_plan,
     format_report_text,
     parse_awg_dump,
     report_schema,
@@ -13,8 +14,7 @@ from awg_cascade_ctl.check import (
 )
 
 DUMP_LINE = (
-    "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
-    "1700000000\t1000\t2000\t25\n"
+    "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
 )
 
 # AmneziaWG format with extra obfuscation fields (jitter, port, etc.)
@@ -39,10 +39,9 @@ def test_parse_awg_dump_amnezia_extra_fields() -> None:
     """AmneziaWG dump lines with extra obfuscation fields are parsed."""
     peers = parse_awg_dump(DUMP_LINE_AMNEZIA)
     assert len(peers) == 1
-    peer = peers[0]
-    assert peer.interface == "awg1"
-    assert peer.peer_endpoint == "10.10.1.1:51820"
-    assert peer.persistent_keepalive == 25
+    assert peers[0].interface == "awg1"
+    assert peers[0].peer_endpoint == "10.10.1.1:51820"
+    assert peers[0].persistent_keepalive == 25
 
 
 def test_parse_awg_dump_ignores_bad_lines() -> None:
@@ -72,9 +71,7 @@ def test_audit_peers_stale_handshake() -> None:
 
 def test_audit_peers_missing_keepalive() -> None:
     """Keepalive other than required -> not ok even if fresh."""
-    peers = parse_awg_dump(
-        DUMP_LINE.replace("\t25\n", "\t0\n")
-    )
+    peers = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t0\n"))
     audits = audit_peers(peers, now_unix=1700000030)
     assert audits[0].keepalive_ok is False
     assert audits[0].ok is False
@@ -186,7 +183,361 @@ def test_report_to_json_zero_links() -> None:
 
 def test_parse_awg_dump_handles_off_keepalive() -> None:
     """Real AWG dump uses 'off' for keepalive; should parse as 0."""
-    line = "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    line = (
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    )
     peers = parse_awg_dump(line)
     assert len(peers) == 1
     assert peers[0].persistent_keepalive == 0
+
+
+def test_parse_awg_dump_interface_plus_peer() -> None:
+    """One interface line + one real peer line -> one peer in list."""
+    interface = "awg0\tPUBKEY\tPSK\t51821\t10.10.1.0/30\t1700000000\t1000\t2000\t5\t60\t1\t2\t3\t4"
+    peer = (
+        "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
+    peers = parse_awg_dump(interface + "\n" + peer)
+    assert len(peers) == 1
+    assert peers[0].interface == "awg1"
+
+
+def test_parse_awg_dump_interface_line_15_fields() -> None:
+    """Interface line (15 fields) is skipped, following peer line is parsed."""
+    interface_15 = "awg0\tPUBKEY\tPSK\t51821\t10.10.1.0/30\t1700000000\t1000\t2000\t5\t60\t1\t2\t3\t4\textra"
+    peer = (
+        "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
+    peers = parse_awg_dump(interface_15 + "\n" + peer)
+    assert len(peers) == 1
+    assert peers[0].interface == "awg1"
+    assert peers[0].persistent_keepalive == 25
+
+
+def test_audit_peers_keepalive_25_ok() -> None:
+    """keepalive=25 -> ok with default range 1..33."""
+    peers = parse_awg_dump(DUMP_LINE)
+    audits = audit_peers(peers, now_unix=1700000030)
+    assert audits[0].keepalive_ok is True
+    assert audits[0].keepalive_status == "OK"
+
+
+def test_audit_peers_keepalive_33_ok() -> None:
+    """keepalive=33 -> ok with default range 1..33."""
+    peers = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t33\n"))
+    audits = audit_peers(peers, now_unix=1700000030)
+    assert audits[0].keepalive_ok is True
+    assert audits[0].keepalive_status == "OK"
+
+
+def test_audit_peers_keepalive_34_mismatch() -> None:
+    """keepalive=34 -> mismatch (out of range 1..33)."""
+    peers = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t34\n"))
+    audits = audit_peers(peers, now_unix=1700000030)
+    assert audits[0].keepalive_ok is False
+    assert audits[0].keepalive_status == "MISMATCH"
+
+
+def test_audit_peers_keepalive_0_off() -> None:
+    """keepalive=0 or off -> OFF."""
+    peers_off = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t0\n"))
+    audits = audit_peers(peers_off, now_unix=1700000030)
+    assert audits[0].keepalive_status == "OFF"
+    off_line = "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    peers_off3 = parse_awg_dump(off_line)
+    audits_off = audit_peers(peers_off3, now_unix=1700000030)
+    assert audits_off[0].keepalive_status == "OFF"
+
+
+def test_format_report_text_keepalive_mismatch() -> None:
+    """Report text shows MISMATCH for out-of-range keepalive."""
+    peers = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t34\n"))
+    audits = audit_peers(peers, now_unix=1700000030)
+    report = build_report("cascade", audits, [])
+    text = format_report_text(report, use_color=False)
+    assert "MISMATCH (got 34, expected 1..33)" in text
+
+
+def test_check_with_config_keepalive_in_range() -> None:
+    """Test check config with keepalive_max=60 and peer keepalive=50 -> OK."""
+    import os
+    import tempfile
+
+    import yaml
+
+    from awg_cascade_ctl.config import CascadeConfig
+
+    cfg_data = {
+        "servers": {
+            "in": {"host": "10.0.0.1", "username": "root"},
+            "mid": {"host": "10.0.0.2", "username": "root"},
+            "out": {"host": "10.0.0.3", "username": "root"},
+        },
+        "network": {
+            "client_subnet": "10.9.9.0/24",
+            "link1_subnet": "10.10.1.0/30",
+            "link2_subnet": "10.10.2.0/30",
+            "dns": ["1.1.1.1"],
+            "ip_checker_url": "http://example.com",
+        },
+        "sysctl": {},
+        "ports": {"client_in": 51820, "link1": 51821, "link2": 51822, "mobile": None},
+        "scripts": {
+            "manage_amneziawg": "/root/awg/manage_amneziawg.sh",
+            "routing": "/root/awg/awg-routing.sh",
+            "backup_prefixes": "/root/awg/ru.zone",
+        },
+        "timeouts": {"ssh_connect": 10, "ssh_command": 30, "deploy": 600, "check": 60},
+        "check": {"keepalive_min": 1, "keepalive_max": 60},
+        "log_level": "info",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg_data, f)
+        fpath = f.name
+    try:
+        cfg = CascadeConfig.load(fpath)
+        peers = [
+            type(
+                "P",
+                (),
+                {
+                    "interface": "awg1",
+                    "peer_endpoint": "10.10.1.1:51820",
+                    "latest_handshake_unix": 1700000000,
+                    "persistent_keepalive": 50,
+                },
+            )()
+        ]
+        audits = audit_peers(
+            peers,
+            now_unix=1700000030,
+            min_keepalive=cfg.check.keepalive_min,
+            max_keepalive=cfg.check.keepalive_max,
+        )
+        assert audits[0].keepalive_ok is True
+        assert audits[0].keepalive_status == "OK"
+    finally:
+        os.unlink(fpath)
+
+
+def test_check_with_config_keepalive_out_of_range() -> None:
+    """Test check config with default max=33 and peer keepalive=50 -> MISMATCH."""
+    import os
+    import tempfile
+
+    import yaml
+
+    from awg_cascade_ctl.config import CascadeConfig
+
+    cfg_data = {
+        "servers": {
+            "in": {"host": "10.0.0.1", "username": "root"},
+            "mid": {"host": "10.0.0.2", "username": "root"},
+            "out": {"host": "10.0.0.3", "username": "root"},
+        },
+        "network": {
+            "client_subnet": "10.9.9.0/24",
+            "link1_subnet": "10.10.1.0/30",
+            "link2_subnet": "10.10.2.0/30",
+            "dns": ["1.1.1.1"],
+            "ip_checker_url": "http://example.com",
+        },
+        "sysctl": {},
+        "ports": {"client_in": 51820, "link1": 51821, "link2": 51822, "mobile": None},
+        "scripts": {
+            "manage_amneziawg": "/root/awg/manage_amneziawg.sh",
+            "routing": "/root/awg/awg-routing.sh",
+            "backup_prefixes": "/root/awg/ru.zone",
+        },
+        "timeouts": {"ssh_connect": 10, "ssh_command": 30, "deploy": 600, "check": 60},
+        "check": {"keepalive_min": 1, "keepalive_max": 33},
+        "log_level": "info",
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg_data, f)
+        fpath = f.name
+    try:
+        cfg = CascadeConfig.load(fpath)
+        peers = [
+            type(
+                "P",
+                (),
+                {
+                    "interface": "awg1",
+                    "peer_endpoint": "10.10.1.1:51820",
+                    "latest_handshake_unix": 1700000000,
+                    "persistent_keepalive": 50,
+                },
+            )()
+        ]
+        audits = audit_peers(
+            peers,
+            now_unix=1700000030,
+            min_keepalive=cfg.check.keepalive_min,
+            max_keepalive=cfg.check.keepalive_max,
+        )
+        assert audits[0].keepalive_ok is False
+        assert audits[0].keepalive_status == "MISMATCH"
+    finally:
+        os.unlink(fpath)
+
+
+def test_check_config_validator_min_gt_max() -> None:
+    """Test CheckConfig validator raises ValueError when keepalive_min > keepalive_max."""
+    from awg_cascade_ctl.config import CheckConfig
+
+    try:
+        CheckConfig(keepalive_min=60, keepalive_max=33)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "keepalive_min must be <= keepalive_max" in str(e)
+
+
+def test_format_report_text_keepalive_off() -> None:
+    """Report text shows OFF for keepalive=0 or off."""
+    # Test with 0
+    peers0 = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t0\n"))
+    report0 = build_report("cascade", audit_peers(peers0, now_unix=1700000030), [])
+    text0 = format_report_text(report0, use_color=False)
+    assert "OFF" in text0
+    # Test with off literal
+    off_line = "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    peers_off = parse_awg_dump(off_line)
+    report_off = build_report(
+        "cascade", audit_peers(peers_off, now_unix=1700000030), []
+    )
+    text_off = format_report_text(report_off, use_color=False)
+    assert "OFF" in text_off
+
+
+def test_describe_check_plan_demo_has_demo_warning() -> None:
+    """Demo source includes a prominent DEMO DATA warning and demo label."""
+    text = describe_check_plan(
+        source="demo",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=33,
+        max_age_sec=HANDSHAKE_MAX_AGE_SEC,
+        probe_url=None,
+        probe_skipped_reason="no --config",
+    )
+    assert "DEMO DATA: your servers are NOT being checked." in text
+    assert "built-in demo data" in text
+
+
+def test_describe_check_plan_dump_file_source() -> None:
+    """Dump-file source shows the file path."""
+    text = describe_check_plan(
+        source="dump_file",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url=None,
+        probe_skipped_reason="no --config",
+        dump_file="/tmp/dump.txt",
+    )
+    assert "dump file /tmp/dump.txt" in text
+
+
+def test_describe_check_plan_ssh_in_source() -> None:
+    """SSH in source text and probe line with URL and timeout."""
+    text = describe_check_plan(
+        source="ssh",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url="https://example.com",
+        probe_skipped_reason=None,
+    )
+    assert 'SSH, server "in" (from cascade.yaml)' in text
+    assert "curl https://example.com (timeout 5 s)" in text
+
+
+def test_describe_check_plan_ssh_all_source() -> None:
+    """SSH all source lists all three servers."""
+    text = describe_check_plan(
+        source="ssh",
+        server_target="all",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url="https://example.com",
+        probe_skipped_reason=None,
+    )
+    assert "SSH, servers in, mid, out" in text
+
+
+def test_describe_check_plan_thresholds_from_config() -> None:
+    """Keepalive range in text follows the passed min/max values."""
+    text = describe_check_plan(
+        source="ssh",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=60,
+        probe_url=None,
+        probe_skipped_reason="no --config",
+    )
+    assert "within 1..60 s" in text
+
+
+def test_describe_check_plan_probe_skipped_no_config() -> None:
+    """Probe skip reason for missing config is shown verbatim."""
+    text = describe_check_plan(
+        source="demo",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url=None,
+        probe_skipped_reason="no --config",
+    )
+    assert "internet access: skipped (no --config)" in text
+
+
+def test_describe_check_plan_probe_skipped_mid_server() -> None:
+    """Probe skip reason for mid/out server is shown verbatim."""
+    text = describe_check_plan(
+        source="ssh",
+        server_target="mid",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url="https://example.com",
+        probe_skipped_reason="server is not in/all",
+    )
+    assert "internet access: skipped (server is not in/all)" in text
+
+
+def test_check_intro_shown_when_should_show_true(monkeypatch) -> None:
+    """When _should_show_intro is True and no --json, intro goes to stderr only."""
+    from typer.testing import CliRunner
+
+    from awg_cascade_ctl import cli as cli_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr(cli_module, "_should_show_intro", lambda json_output: True)
+    result = CliRunner().invoke(cli_module.app, ["check"])
+    assert "DEMO DATA" in result.stderr
+    assert "DEMO DATA" not in result.stdout
+
+
+def test_check_intro_suppressed_with_json(monkeypatch) -> None:
+    """--json suppresses the intro (real _should_show_intro returns False)."""
+    from typer.testing import CliRunner
+
+    from awg_cascade_ctl import cli as cli_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    result = CliRunner().invoke(cli_module.app, ["check", "--json"])
+    assert "DEMO DATA" not in result.stderr
+    data = json.loads(result.output)
+    assert data["schema"] == "awg-ctl/check/v1"
+
+
+def test_check_intro_suppressed_when_should_show_false(monkeypatch) -> None:
+    """When _should_show_intro is False, no intro appears."""
+    from typer.testing import CliRunner
+
+    from awg_cascade_ctl import cli as cli_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr(cli_module, "_should_show_intro", lambda json_output: False)
+    result = CliRunner().invoke(cli_module.app, ["check"])
+    assert "DEMO DATA" not in result.stderr

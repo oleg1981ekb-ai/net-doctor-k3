@@ -66,6 +66,7 @@ def resolve_ssh_key(
         # We just check whether agent has any identities.
         try:
             from paramiko.agent import Agent
+
             agent = Agent()
             identities = agent.get_keys()
             if identities:
@@ -131,7 +132,9 @@ class SSHTransport:
         self.user = user
         self.key_path = key_path
         self.passphrase = passphrase
-        self.known_hosts_path = known_hosts_path or str(Path.home() / ".ssh" / "known_hosts")
+        self.known_hosts_path = known_hosts_path or str(
+            Path.home() / ".ssh" / "known_hosts"
+        )
         self.connect_timeout = connect_timeout
         self.command_timeout = command_timeout
         self._missing_keys_policy = RejectPolicy()

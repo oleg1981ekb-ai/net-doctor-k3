@@ -79,13 +79,17 @@ class RemoteLock:
         result = self._run_command(cmd)
         if getattr(result, "ok", False) is False:
             owner = self._diagnose_owner()
-            raise LockError(f"Remote lock is busy: {self.path}. Owner diagnostics: {owner}")
+            raise LockError(
+                f"Remote lock is busy: {self.path}. Owner diagnostics: {owner}"
+            )
         self._held = True
 
     def _diagnose_owner(self) -> str:
         """Best-effort owner diagnostics via lslocks/fuser."""
         try:
-            diag = self._run_command(f"lslocks 2>/dev/null | grep {self.path} || fuser {self.path} 2>&1")
+            diag = self._run_command(
+                f"lslocks 2>/dev/null | grep {self.path} || fuser {self.path} 2>&1"
+            )
             return str(getattr(diag, "stdout", "")) or "owner unknown"
         except (OSError, RuntimeError):  # best-effort diagnostics
             return "owner unknown"

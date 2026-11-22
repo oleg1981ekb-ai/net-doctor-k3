@@ -127,7 +127,9 @@ def test_menu_phase2_stub_exits_64(monkeypatch) -> None:
         True,
     )
     mock_select = mock.MagicMock()
-    mock_select.return_value.ask.return_value = "Clients      — Manage clients (Phase 2 stub)"
+    mock_select.return_value.ask.return_value = (
+        "Clients      — Manage clients (Phase 2 stub)"
+    )
     monkeypatch.setattr(questionary, "select", mock_select)
 
     result = runner.invoke(app, ["menu"])
@@ -167,8 +169,7 @@ def test_check_with_dump_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("time.time", lambda: 1700000030)
     dump_path = tmp_path / "dump.txt"
     dump_path.write_text(
-        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
-        "1700000000\t1000\t2000\t25\n"
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
     result = runner.invoke(app, ["check", "--dump-file", str(dump_path)])
     assert result.exit_code == 0
@@ -180,8 +181,7 @@ def test_check_with_dump_file_json(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("time.time", lambda: 1700000030)
     dump_path = tmp_path / "dump.txt"
     dump_path.write_text(
-        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
-        "1700000000\t1000\t2000\t25\n"
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
     result = runner.invoke(app, ["check", "--dump-file", str(dump_path), "--json"])
     assert result.exit_code == 0
@@ -199,8 +199,7 @@ def test_check_with_config(monkeypatch, tmp_path) -> None:
 
     # Mock load_real_dump to avoid actual SSH
     mock_peers = parse_awg_dump(
-        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
-        "1700000000\t1000\t2000\t25\n"
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
     monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
     monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
@@ -230,14 +229,17 @@ def test_menu_with_config(monkeypatch) -> None:
 
     # Mock _run_check to capture args
     captured = {}
+
     def fake_run_check(**kwargs):
         captured.update(kwargs)
         return 0
+
     monkeypatch.setattr("awg_cascade_ctl.cli._run_check", fake_run_check)
 
     result = runner.invoke(app, ["menu", "--config", "/tmp/cascade.yaml"])
     assert result.exit_code == 0
     assert captured.get("config_path") == "/tmp/cascade.yaml"
+
 
 def test_check_explicit_config_skips_pause(monkeypatch) -> None:
     """check --config skips 3s pause and never calls _wait_for_key_or_timeout."""
@@ -248,7 +250,9 @@ def test_check_explicit_config_skips_pause(monkeypatch) -> None:
 
     def failing_wait(seconds: float) -> bool:
         called["value"] = True
-        raise AssertionError("_wait_for_key_or_timeout must not be called for explicit source")
+        raise AssertionError(
+            "_wait_for_key_or_timeout must not be called for explicit source"
+        )
 
     monkeypatch.setattr(cli_module, "_wait_for_key_or_timeout", failing_wait)
 
@@ -275,7 +279,9 @@ def test_check_explicit_dump_file_skips_pause(monkeypatch) -> None:
 
     def failing_wait(seconds: float) -> bool:
         called["value"] = True
-        raise AssertionError("_wait_for_key_or_timeout must not be called for explicit source")
+        raise AssertionError(
+            "_wait_for_key_or_timeout must not be called for explicit source"
+        )
 
     monkeypatch.setattr(cli_module, "_wait_for_key_or_timeout", failing_wait)
 
@@ -302,7 +308,9 @@ def test_check_non_interactive_runs_demo(monkeypatch) -> None:
 
     def failing_wait(seconds: float) -> bool:
         called["value"] = True
-        raise AssertionError("_wait_for_key_or_timeout must not be called when non-interactive")
+        raise AssertionError(
+            "_wait_for_key_or_timeout must not be called when non-interactive"
+        )
 
     monkeypatch.setattr(cli_module, "_wait_for_key_or_timeout", failing_wait)
 
@@ -325,8 +333,16 @@ def test_resolve_check_source_explicit_passthrough() -> None:
     """_resolve_check_source returns explicit config/dump unchanged."""
     from awg_cascade_ctl import cli as cli_module
 
-    assert cli_module._resolve_check_source("/tmp/c.yaml", None) == ("/tmp/c.yaml", None, "in")
-    assert cli_module._resolve_check_source(None, "/tmp/d.txt") == (None, "/tmp/d.txt", "in")
+    assert cli_module._resolve_check_source("/tmp/c.yaml", None) == (
+        "/tmp/c.yaml",
+        None,
+        "in",
+    )
+    assert cli_module._resolve_check_source(None, "/tmp/d.txt") == (
+        None,
+        "/tmp/d.txt",
+        "in",
+    )
 
 
 def test_resolve_check_source_interactive_timeout_returns_demo(monkeypatch) -> None:
@@ -344,7 +360,9 @@ def test_resolve_check_source_interactive_keypress_opens_menu(monkeypatch) -> No
 
     monkeypatch.setattr(cli_module, "_is_interactive_mode", lambda: True)
     monkeypatch.setattr(cli_module, "_wait_for_key_or_timeout", lambda seconds: True)
-    monkeypatch.setattr(cli_module, "_source_selection_menu", lambda: ("/tmp/c.yaml", None, "in"))
+    monkeypatch.setattr(
+        cli_module, "_source_selection_menu", lambda: ("/tmp/c.yaml", None, "in")
+    )
     assert cli_module._resolve_check_source(None, None) == ("/tmp/c.yaml", None, "in")
 
 
@@ -500,7 +518,9 @@ def test_check_command_server_flag_skips_pause(monkeypatch) -> None:
 
     def failing_wait(seconds: float) -> bool:
         called["value"] = True
-        raise AssertionError("_wait_for_key_or_timeout must not be called for explicit source")
+        raise AssertionError(
+            "_wait_for_key_or_timeout must not be called for explicit source"
+        )
 
     monkeypatch.setattr(cli_module, "_wait_for_key_or_timeout", failing_wait)
 
@@ -512,7 +532,9 @@ def test_check_command_server_flag_skips_pause(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_module, "_run_check", fake_run_check)
 
-    result = runner.invoke(app, ["check", "--server", "mid", "--config", "/tmp/cascade.yaml"])
+    result = runner.invoke(
+        app, ["check", "--server", "mid", "--config", "/tmp/cascade.yaml"]
+    )
     assert result.exit_code == 0
     assert called["value"] is False
     assert captured.get("config_path") == "/tmp/cascade.yaml"

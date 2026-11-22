@@ -39,8 +39,14 @@ def test_unix_mapping_warns_and_fail_both_critical() -> None:
 
 
 def test_unix_warn_as_ok() -> None:
-    assert resolve_exit_code_from_outcome("warning", unix=True, warn_as_ok=True) == ExitCode.OK
-    assert resolve_exit_code_from_outcome("fail", unix=True, warn_as_ok=True) == ExitCode.CRITICAL
+    assert (
+        resolve_exit_code_from_outcome("warning", unix=True, warn_as_ok=True)
+        == ExitCode.OK
+    )
+    assert (
+        resolve_exit_code_from_outcome("fail", unix=True, warn_as_ok=True)
+        == ExitCode.CRITICAL
+    )
 
 
 def test_strict_maps_warn_to_fail() -> None:
@@ -81,7 +87,9 @@ def test_resolve_legacy_exit_code() -> None:
 def test_diagnose_json_has_schema_version() -> None:
     report = DiagnoseReport(
         server="in",
-        results=[CheckResult(check="tunnel", status="pass", summary="Туннель awg0 поднят")],
+        results=[
+            CheckResult(check="tunnel", status="pass", summary="Туннель awg0 поднят")
+        ],
         verdict="green",
         server_ip="10.0.0.1",
         timestamp="2026-11-21 17:00",

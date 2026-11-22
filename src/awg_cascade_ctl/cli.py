@@ -14,8 +14,12 @@ from pydantic import ValidationError
 
 from awg_cascade_ctl import __version__
 from awg_cascade_ctl.check import (
+    HANDSHAKE_MAX_AGE_SEC,
+    KEEPALIVE_MAX,
+    KEEPALIVE_MIN,
     audit_peers,
     build_report,
+    describe_check_plan,
     format_report_text,
     load_e2e_probes,
     load_real_dump,
@@ -39,6 +43,7 @@ from awg_cascade_ctl.ssh import SSHTransport
 
 try:
     import questionary
+
     QUESTIONARY_AVAILABLE = True
 except ImportError:
     QUESTIONARY_AVAILABLE = False
@@ -83,7 +88,11 @@ def _is_interactive_mode() -> bool:
     """Check if we should run in interactive mode."""
     if not QUESTIONARY_AVAILABLE:
         return False
-    return sys.stdin.isatty() and os.environ.get("CI", "").lower() not in ("true", "1", "yes")
+    return sys.stdin.isatty() and os.environ.get("CI", "").lower() not in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 def _wait_for_key_or_timeout(seconds: float) -> bool:
@@ -123,7 +132,9 @@ def _wait_for_key_or_timeout(seconds: float) -> bool:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _source_selection_menu() -> tuple[str | None, str | None, Literal["in", "mid", "out", "all"]]:
+def _source_selection_menu() -> tuple[
+    str | None, str | None, Literal["in", "mid", "out", "all"]
+]:
     """Open interactive source-selection menu.
 
     Returns (config_path, dump_file, server_target) chosen by user.
@@ -193,7 +204,7 @@ def _source_selection_menu() -> tuple[str | None, str | None, Literal["in", "mid
             return (None, None, "in")
         if not path:
             return (None, None, "in")
-        target: Literal["in", "mid", "out", "all"] = answer[len("ssh_"):]
+        target: Literal["in", "mid", "out", "all"] = answer[len("ssh_") :]
         return (path, None, target)
 
     return (None, None, "in")
@@ -214,10 +225,26 @@ def _resolve_check_source(
         return (config_path, dump_file, "in")
     if not _is_interactive_mode():
         return (None, None, "in")
-    typer.echo("Источник: demo (тест) | 3с до меню... Нажмите любую клавишу для выбора.")
+    typer.echo(
+        "Источник: demo (тест) | 3с до меню... Нажмите любую клавишу для выбора."
+    )
     if _wait_for_key_or_timeout(3.0):
         return _source_selection_menu()
     return (None, None, "in")
+
+
+def _should_show_intro(json_output: bool) -> bool:
+    """Return True when the check plan intro should be printed to stderr.
+
+    Printed only when JSON output is off and stderr is a terminal, so
+    machine-readable output and redirected logs stay clean.
+    """
+    if json_output:
+        return False
+    try:
+        return sys.stderr.isatty()
+    except OSError:
+        return False
 
 
 def _run_check(
@@ -252,6 +279,48 @@ def _run_check(
         source = "ssh"
     else:
         source = "demo"
+
+    # Read config once (before the dump load) so the intro and the keepalive
+    # thresholds share a single source of truth. A missing config falls back to
+    # defaults here; the real "config file not found" error is still raised by
+    # load_real_dump and handled by the existing except clause below.
+    min_keepalive = KEEPALIVE_MIN
+    max_keepalive = KEEPALIVE_MAX
+    probe_url: str | None = None
+    if config_path is not None:
+        from awg_cascade_ctl.config import CascadeConfig
+
+        try:
+            cfg = CascadeConfig.load(config_path)
+            min_keepalive = cfg.check.keepalive_min
+            max_keepalive = cfg.check.keepalive_max
+            probe_url = cfg.network.ip_checker_url
+        except FileNotFoundError:
+            # Config missing → fall back to defaults; load_real_dump reports it.
+            pass
+
+    # Probe skip reason mirrors load_e2e_probes: it runs only for in/all with a config.
+    if server_target not in ("in", "all"):
+        probe_skipped_reason: str | None = "server is not in/all"
+    elif config_path is None:
+        probe_skipped_reason = "no --config"
+    else:
+        probe_skipped_reason = None
+
+    if _should_show_intro(json_output):
+        typer.echo(
+            describe_check_plan(
+                source=source,
+                server_target=server_target,
+                min_keepalive=min_keepalive,
+                max_keepalive=max_keepalive,
+                max_age_sec=HANDSHAKE_MAX_AGE_SEC,
+                probe_url=probe_url,
+                probe_skipped_reason=probe_skipped_reason,
+                dump_file=dump_file,
+            ),
+            err=True,
+        )
 
     try:
         peers = load_real_dump(
@@ -295,8 +364,12 @@ def _run_check(
     except FileNotFoundError as exc:
         typer.echo(f"ERROR: config file not found: {exc}", err=True)
         raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
-
-    links = audit_peers(peers, now_unix=int(time.time()))
+    links = audit_peers(
+        peers,
+        now_unix=int(time.time()),
+        min_keepalive=min_keepalive,
+        max_keepalive=max_keepalive,
+    )
     probes = load_e2e_probes(config_path=config_path, server_target=server_target)
 
     report = build_report(
@@ -403,7 +476,9 @@ def check(
             err=True,
         )
         raise typer.Exit(code=usage_error)
-    config_path, dump_file, resolved_target = _resolve_check_source(config_path, dump_file)
+    config_path, dump_file, resolved_target = _resolve_check_source(
+        config_path, dump_file
+    )
     final_target = server_target or resolved_target
 
     # Resolve passphrase priority: CLI arg → env var → interactive prompt (if --ask-pass)
@@ -469,12 +544,16 @@ def _run_diagnose(
         typer.echo(f"ERROR: invalid server: {server}", err=True)
         return ExitCode.USAGE_ERROR.value
 
-    cfg = CascadeConfig.load(config_path) if config_path else CascadeConfig(
-        servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
-        network=None,  # type: ignore[arg-type]
-        ports=None,  # type: ignore[arg-type]
-        scripts=None,  # type: ignore[arg-type]
-        timeouts=None,  # type: ignore[arg-type]
+    cfg = (
+        CascadeConfig.load(config_path)
+        if config_path
+        else CascadeConfig(
+            servers={"in": None, "mid": None, "out": None},  # type: ignore[assignment]
+            network=None,  # type: ignore[arg-type]
+            ports=None,  # type: ignore[arg-type]
+            scripts=None,  # type: ignore[arg-type]
+            timeouts=None,  # type: ignore[arg-type]
+        )
     )
 
     server_cfg = cfg.servers.get(server)
@@ -509,15 +588,15 @@ def _run_diagnose(
         except Exception as exc:  # noqa: BLE001
             msg = str(exc).lower()
             encrypted_err = (
-                "passwordrequired" in msg
-                or "encrypted" in msg
-                or "passphrase" in msg
+                "passwordrequired" in msg or "encrypted" in msg or "passphrase" in msg
             )
             if encrypted_err and ask_pass and sys.stdin.isatty():
                 try:
                     from typer import prompt as typer_prompt
 
-                    new_pass = typer_prompt("SSH key passphrase (hidden)", hide_input=True)
+                    new_pass = typer_prompt(
+                        "SSH key passphrase (hidden)", hide_input=True
+                    )
                 except (KeyboardInterrupt, EOFError):
                     typer.echo("\nAborted.", err=True)
                     return ExitCode.USAGE_ERROR.value
@@ -543,7 +622,11 @@ def _run_diagnose(
     if json_output:
         typer.echo(diagnose_report_to_json(report))
     else:
-        typer.echo(format_diagnose_report_text(report, use_color=use_color, show_details=details))
+        typer.echo(
+            format_diagnose_report_text(
+                report, use_color=use_color, show_details=details
+            )
+        )
 
     if unix:
         typer.echo(
@@ -809,11 +892,21 @@ def menu(
     ]
 
     def _run_server_diagnose() -> None:
-        resolved_config, _resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        resolved_config, _resolved_dump, resolved_target = _resolve_check_source(
+            config_path, None
+        )
         _run_diagnose(
             config_path=resolved_config,
             server=resolved_target,
-            checks=["tunnel", "service", "versions", "firewall", "routes", "logs", "scripts"],
+            checks=[
+                "tunnel",
+                "service",
+                "versions",
+                "firewall",
+                "routes",
+                "logs",
+                "scripts",
+            ],
             color="auto",
             json_output=False,
             details=False,
@@ -823,7 +916,9 @@ def menu(
         )
 
     def _run_peers_check() -> None:
-        resolved_config, resolved_dump, resolved_target = _resolve_check_source(config_path, None)
+        resolved_config, resolved_dump, resolved_target = _resolve_check_source(
+            config_path, None
+        )
         _run_check(
             json_output=False,
             config_path=resolved_config,

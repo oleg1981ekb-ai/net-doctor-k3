@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 
 HANDSHAKE_MAX_AGE_SEC = 180
 REQUIRED_KEEPALIVE = 25
+KEEPALIVE_MIN = 1
+KEEPALIVE_MAX = 33
+E2E_CURL_TIMEOUT_SEC = 5
 
 SCHEMA_VERSION = "awg-ctl/check/v1"
 
@@ -37,7 +40,9 @@ def _paint(text: str, color: str, use_color: bool) -> str:
 
 def _demo_dump() -> str:
     """Return the hardcoded demo AWG dump (used when no real source is available)."""
-    return "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    return (
+        "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
 
 
 def load_real_dump_target(
@@ -58,7 +63,9 @@ def load_real_dump_target(
 
     server = cfg.servers[target]
     # Resolve key: explicit CLI → config → agent → auto-detect
-    resolved_key, needs_passphrase = resolve_ssh_key_from_config(cfg, explicit_key_path=key_path)
+    resolved_key, needs_passphrase = resolve_ssh_key_from_config(
+        cfg, explicit_key_path=key_path
+    )
     # If passphrase provided via CLI/env, use it; otherwise rely on agent
     effective_passphrase = key_passphrase if key_passphrase is not None else None
 
@@ -93,7 +100,11 @@ def load_real_dump_all(
     """Load AWG peer data from all cascade servers via SSH (in, mid, out)."""
     peers: list[RawPeer] = []
     for target in ("in", "mid", "out"):
-        peers.extend(load_real_dump_target(cfg, target, key_path=key_path, key_passphrase=key_passphrase))
+        peers.extend(
+            load_real_dump_target(
+                cfg, target, key_path=key_path, key_passphrase=key_passphrase
+            )
+        )
     return peers
 
 
@@ -119,8 +130,12 @@ def load_real_dump(
 
         cfg = CascadeConfig.load(config_path)
         if server_target == "all":
-            return load_real_dump_all(cfg, key_path=key_path, key_passphrase=key_passphrase)
-        return load_real_dump_target(cfg, server_target, key_path=key_path, key_passphrase=key_passphrase)
+            return load_real_dump_all(
+                cfg, key_path=key_path, key_passphrase=key_passphrase
+            )
+        return load_real_dump_target(
+            cfg, server_target, key_path=key_path, key_passphrase=key_passphrase
+        )
     return parse_awg_dump(_demo_dump())
 
 
@@ -144,7 +159,7 @@ def load_e2e_probes(
     url = cfg.network.ip_checker_url
     try:
         result = subprocess.run(
-            ["curl", "-sS", "--max-time", "5", url],
+            ["curl", "-sS", "--max-time", str(E2E_CURL_TIMEOUT_SEC), url],
             capture_output=True,
             check=False,
             text=True,
@@ -177,6 +192,9 @@ class LinkAudit(BaseModel):
     keepalive_ok: bool = False
     handshake_fresh: bool = False
     ok: bool = False
+    keepalive_status: Literal["OK", "OFF", "MISMATCH"] = "OK"
+    keepalive_min: int | None = None
+    keepalive_max: int | None = None
 
 
 class E2EProbe(BaseModel):
@@ -235,6 +253,8 @@ def parse_awg_dump(dump: str) -> list[RawPeer]:
             continue
         interface = parts[0]
         endpoint = parts[3]
+        if ":" not in endpoint and endpoint != "(none)":
+            continue
         handshake = parts[5]
         keepalive_str = parts[8]
         try:
@@ -264,14 +284,36 @@ def audit_peers(
     peers: list[RawPeer],
     now_unix: int,
     max_age_sec: int = HANDSHAKE_MAX_AGE_SEC,
-    required_keepalive: int = REQUIRED_KEEPALIVE,
+    required_keepalive: int | None = None,
+    min_keepalive: int = KEEPALIVE_MIN,
+    max_keepalive: int = KEEPALIVE_MAX,
 ) -> list[LinkAudit]:
     """Evaluate freshness and keepalive for each parsed peer."""
     audits: list[LinkAudit] = []
     for peer in peers:
-        age = None if peer.latest_handshake_unix == 0 else now_unix - peer.latest_handshake_unix
-        keepalive_ok = peer.persistent_keepalive == required_keepalive
+        age = (
+            None
+            if peer.latest_handshake_unix == 0
+            else now_unix - peer.latest_handshake_unix
+        )
         handshake_fresh = age is not None and 0 <= age < max_age_sec
+        kv = peer.persistent_keepalive
+        if kv == 0:
+            keepalive_ok = False
+            keepalive_status = "OFF"
+            keepalive_min_val = min_keepalive
+            keepalive_max_val = max_keepalive
+        elif required_keepalive is not None:
+            keepalive_ok = kv == required_keepalive
+            keepalive_status = "OK" if keepalive_ok else "MISMATCH"
+            keepalive_min_val = required_keepalive
+            keepalive_max_val = required_keepalive
+        else:
+            keepalive_ok = min_keepalive <= kv <= max_keepalive
+            keepalive_status = "OK" if keepalive_ok else "MISMATCH"
+            keepalive_min_val = min_keepalive
+            keepalive_max_val = max_keepalive
+        ok = keepalive_ok and handshake_fresh
         audits.append(
             LinkAudit(
                 interface=peer.interface,
@@ -279,8 +321,11 @@ def audit_peers(
                 persistent_keepalive=peer.persistent_keepalive,
                 latest_handshake_age_sec=age,
                 keepalive_ok=keepalive_ok,
+                keepalive_status=keepalive_status,
+                keepalive_min=keepalive_min_val,
+                keepalive_max=keepalive_max_val,
                 handshake_fresh=handshake_fresh,
-                ok=keepalive_ok and handshake_fresh,
+                ok=ok,
             )
         )
     return audits
@@ -322,12 +367,67 @@ def report_schema() -> dict:
     return CheckReport.model_json_schema()
 
 
+def describe_check_plan(
+    *,
+    source: Literal["demo", "dump_file", "ssh"],
+    server_target: Literal["in", "mid", "out", "all"],
+    min_keepalive: int,
+    max_keepalive: int,
+    max_age_sec: int = HANDSHAKE_MAX_AGE_SEC,
+    probe_url: str | None = None,
+    probe_skipped_reason: str | None = None,
+    dump_file: str | None = None,
+) -> str:
+    """Return a plain-English description of what `check` will verify.
+
+    Pure function: performs no I/O. All numbers/URLs must come from the same
+    values used by the actual check (threshold, keepalive range, probe URL,
+    curl timeout constant).
+    """
+    lines: list[str] = []
+    if source == "demo":
+        lines.append("DEMO DATA: your servers are NOT being checked.")
+    lines.append("awg-ctl check")
+
+    if source == "ssh":
+        if server_target == "all":
+            src_text = "SSH, servers in, mid, out"
+        else:
+            src_text = f'SSH, server "{server_target}" (from cascade.yaml)'
+    elif source == "dump_file":
+        src_text = f"dump file {dump_file}" if dump_file else "dump file"
+    else:
+        src_text = "built-in demo data"
+
+    lines.append(f"  Source:      {src_text}")
+    lines.append(
+        f"  Checks:      1) handshake is newer than {max_age_sec} s for every peer"
+    )
+    lines.append(
+        f"               2) keepalive is enabled and within {min_keepalive}..{max_keepalive} s"
+    )
+    if probe_skipped_reason is not None:
+        lines.append(
+            f"               3) internet access: skipped ({probe_skipped_reason})"
+        )
+    else:
+        lines.append(
+            f"               3) internet access: curl {probe_url} (timeout {E2E_CURL_TIMEOUT_SEC} s)"
+        )
+    lines.append("  Not checked: traffic counters, allowed-ips, routes, services")
+    lines.append("               (see `awg-ctl diagnose`)")
+
+    return "\n".join(lines)
+
+
 def format_report_text(report: CheckReport, use_color: bool = False) -> str:
     """Format a check report as human-readable text (summary-first)."""
     lines: list[str] = [f"awg-ctl check - {report.cascade}"]
     status_text = {"pass": "PASS", "fail": "FAIL", "warning": "WARN"}[report.status]
     status_color = {"pass": "green", "fail": "red", "warning": "yellow"}[report.status]
-    lines.append(f"status: {_paint(status_text, status_color, use_color)} ({report.status})")
+    lines.append(
+        f"status: {_paint(status_text, status_color, use_color)} ({report.status})"
+    )
     overall_text = "OK" if report.ok else "FAILED"
     overall_color = "green" if report.ok else "red"
     lines.append(f"overall: {_paint(overall_text, overall_color, use_color)}")
@@ -340,9 +440,12 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
         ok_count = sum(1 for link in report.links if link.ok)
         lines.append(f"  {ok_count}/{len(report.links)} ok")
         for link in report.links:
+            ka_text = link.keepalive_status
+            if link.keepalive_status == "MISMATCH":
+                ka_text = f"MISMATCH (got {link.persistent_keepalive}, expected {link.keepalive_min}..{link.keepalive_max})"
             lines.append(
                 f"  {link.interface} -> {link.peer_endpoint}: "
-                f"keepalive={'OK' if link.keepalive_ok else 'MISSING'}, "
+                f"keepalive={ka_text}, "
                 f"handshake={'fresh' if link.handshake_fresh else 'STALE'}, "
                 f"ok={'yes' if link.ok else 'no'}"
             )

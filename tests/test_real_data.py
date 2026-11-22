@@ -184,7 +184,9 @@ def test_load_real_dump_all_aggregates(monkeypatch) -> None:
             )
         ]
 
-    monkeypatch.setattr(check_module, "load_real_dump_target", fake_load_real_dump_target)
+    monkeypatch.setattr(
+        check_module, "load_real_dump_target", fake_load_real_dump_target
+    )
 
     peers = check_module.load_real_dump_all(mock.MagicMock())
     assert len(peers) == 3
@@ -204,8 +206,18 @@ def test_load_e2e_probes_skips_for_mid_out(monkeypatch) -> None:
 
     monkeypatch.setattr(check_module.subprocess, "run", fake_run)
 
-    assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="mid") == []
-    assert check_module.load_e2e_probes(config_path="/path/to/config.yaml", server_target="out") == []
+    assert (
+        check_module.load_e2e_probes(
+            config_path="/path/to/config.yaml", server_target="mid"
+        )
+        == []
+    )
+    assert (
+        check_module.load_e2e_probes(
+            config_path="/path/to/config.yaml", server_target="out"
+        )
+        == []
+    )
     assert subprocess_called["value"] is False
 
 
@@ -266,7 +278,9 @@ def test_load_real_dump_all_passes_key_options(monkeypatch) -> None:
     captured_opts = []
 
     def fake_load_real_dump_target(cfg, target, key_path=None, key_passphrase=None):
-        captured_opts.append({"target": target, "key_path": key_path, "key_passphrase": key_passphrase})
+        captured_opts.append(
+            {"target": target, "key_path": key_path, "key_passphrase": key_passphrase}
+        )
         return [
             RawPeer(
                 interface=f"awg-{target}",
@@ -276,12 +290,20 @@ def test_load_real_dump_all_passes_key_options(monkeypatch) -> None:
             )
         ]
 
-    monkeypatch.setattr("awg_cascade_ctl.check.load_real_dump_target", fake_load_real_dump_target)
+    monkeypatch.setattr(
+        "awg_cascade_ctl.check.load_real_dump_target", fake_load_real_dump_target
+    )
 
     mock_cfg = mock.MagicMock()
-    mock_cfg.servers = {"in": mock.MagicMock(), "mid": mock.MagicMock(), "out": mock.MagicMock()}
+    mock_cfg.servers = {
+        "in": mock.MagicMock(),
+        "mid": mock.MagicMock(),
+        "out": mock.MagicMock(),
+    }
 
-    peers = check_module.load_real_dump_all(mock_cfg, key_path="/test/key", key_passphrase="testpass")
+    peers = check_module.load_real_dump_all(
+        mock_cfg, key_path="/test/key", key_passphrase="testpass"
+    )
 
     assert len(peers) == 3
     assert len(captured_opts) == 3

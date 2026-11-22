@@ -45,8 +45,10 @@ def load_api_key():
     key = os.environ.get("OPENROUTER_API_KEY")
     if key:
         return key.strip()
-    for path in (os.path.join(os.getcwd(), ".env"),
-                 os.path.expanduser("~/.claude/.env")):
+    for path in (
+        os.path.join(os.getcwd(), ".env"),
+        os.path.expanduser("~/.claude/.env"),
+    ):
         try:
             with open(path) as f:
                 for line in f:
@@ -60,10 +62,12 @@ def load_api_key():
 
 def call_model(api_key, model, prompt):
     """Return (content, error). Exactly one is non-None."""
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode()
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    ).encode()
     req = urllib.request.Request(API_URL, data=body, method="POST")
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("Content-Type", "application/json")
@@ -111,10 +115,15 @@ FINAL RANKING:
 def run(question, models, api_key):
     # --- Stage 1: independent answers, in parallel ---------------------------
     with ThreadPoolExecutor(max_workers=len(models)) as ex:
-        results = list(ex.map(
-            lambda m: (m, *call_model(api_key, m, STAGE1_PROMPT.format(question=question))),
-            models,
-        ))
+        results = list(
+            ex.map(
+                lambda m: (
+                    m,
+                    *call_model(api_key, m, STAGE1_PROMPT.format(question=question)),
+                ),
+                models,
+            )
+        )
 
     members = []  # successful answers, in label order
     failures = []
@@ -137,15 +146,21 @@ def run(question, models, api_key):
     block = "\n\n".join(f"{m['label']}:\n{m['answer']}" for m in members)
     review_prompt = STAGE2_PROMPT.format(question=question, block=block)
     with ThreadPoolExecutor(max_workers=len(members)) as ex:
-        review_results = list(ex.map(
-            lambda m: (m["model"], *call_model(api_key, m["model"], review_prompt)),
-            members,
-        ))
+        review_results = list(
+            ex.map(
+                lambda m: (m["model"], *call_model(api_key, m["model"], review_prompt)),
+                members,
+            )
+        )
 
     reviews = []
     for model, content, err in review_results:
-        reviews.append({"reviewer_model": model,
-                        "review": content if content else f"[review failed] {err}"})
+        reviews.append(
+            {
+                "reviewer_model": model,
+                "review": content if content else f"[review failed] {err}",
+            }
+        )
 
     # --- Aggregate rankings by average position ------------------------------
     positions = {m["label"]: [] for m in members}
@@ -158,13 +173,19 @@ def run(question, models, api_key):
     for m in members:
         ranks = positions[m["label"]]
         avg = sum(ranks) / len(ranks) if ranks else None
-        aggregate.append({"label": m["label"], "model": m["model"],
-                          "avg_rank": avg, "votes": len(ranks)})
+        aggregate.append(
+            {
+                "label": m["label"],
+                "model": m["model"],
+                "avg_rank": avg,
+                "votes": len(ranks),
+            }
+        )
     aggregate.sort(key=lambda x: (x["avg_rank"] is None, x["avg_rank"] or 0))
 
     return {
         "question": question,
-        "members": members,            # label -> model -> answer (de-anonymized)
+        "members": members,  # label -> model -> answer (de-anonymized)
         "reviews": reviews,
         "aggregate_ranking": aggregate,  # best first
         "failures": failures,
@@ -175,12 +196,11 @@ def parse_ranking(review_text, valid_labels):
     """Yield (position, 'Response X') pairs from the FINAL RANKING block."""
     valid = set(valid_labels)
     lines = review_text.splitlines()
-    idx = next((i for i, l in enumerate(lines)
-                if "FINAL RANKING" in l.upper()), None)
+    idx = next((i for i, l in enumerate(lines) if "FINAL RANKING" in l.upper()), None)
     if idx is None:
         return
     pos = 0
-    for line in lines[idx + 1:]:
+    for line in lines[idx + 1 :]:
         for label in valid:
             if label in line:
                 pos += 1
@@ -201,8 +221,14 @@ def main():
 
     api_key = load_api_key()
     if not api_key:
-        print(json.dumps({"error": "OPENROUTER_API_KEY not found in env or .env. "
-                                   "Add it to the project .env to use cross-vendor mode."}))
+        print(
+            json.dumps(
+                {
+                    "error": "OPENROUTER_API_KEY not found in env or .env. "
+                    "Add it to the project .env to use cross-vendor mode."
+                }
+            )
+        )
         sys.exit(1)
 
     print(json.dumps(run(question, models, api_key), indent=2, ensure_ascii=False))
