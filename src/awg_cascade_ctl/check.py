@@ -94,6 +94,8 @@ def describe_ssh_error(
         if isinstance(current, AuthenticationException):
             kp = key_path if key_path else "ssh-agent / auto-detect"
             return f"SSH authentication failed for server {server_name} ({host}) with key {kp}."
+        if isinstance(current, FileNotFoundError):
+            return f"SSH key file not found for server {server_name}: {key_path}"
         if isinstance(
             current,
             (
@@ -127,12 +129,17 @@ def _key_path_from_config(
     Priority (explicit CLI always wins):
     1. ``explicit_key_path`` – from CLI ``--key-path`` (overrides all).
     2. ``server.ssh_key_path`` – from ``cascade.yaml`` for the target server.
-    3. ``None`` – let SSHTransport auto‑detect (agent / defaults).
+    3. First ``ssh_key_path`` from servers in order ("in", "mid", "out").
+    4. ``None`` – let SSHTransport auto‑detect (agent / defaults).
     """
     if explicit_key_path is not None and isinstance(explicit_key_path, str):
         return os.path.expanduser(explicit_key_path)
     if target in cfg.servers and cfg.servers[target].ssh_key_path is not None:
         return os.path.expanduser(cfg.servers[target].ssh_key_path)
+    # Fallback: first server with ssh_key_path in order
+    for fb in ("in", "mid", "out"):
+        if fb in cfg.servers and cfg.servers[fb].ssh_key_path is not None:
+            return os.path.expanduser(cfg.servers[fb].ssh_key_path)
     return None
 
 
@@ -162,6 +169,15 @@ def load_real_dump_target(
     # Emit key status for user-facing diagnostics
     if resolved_key is not None:
         from awg_cascade_ctl.ssh import _key_needs_passphrase
+
+        if not Path(resolved_key).is_file():
+            raise SSHDumpError(
+                server=target,
+                host=server.host,
+                port=server.port,
+                key_path=resolved_key,
+                exc=FileNotFoundError(resolved_key),
+            )
 
         needs_passphrase = _key_needs_passphrase(resolved_key)
         status = "encrypted" if needs_passphrase else "unencrypted"

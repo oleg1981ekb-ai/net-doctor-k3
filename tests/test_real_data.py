@@ -127,7 +127,7 @@ def test_fetch_and_parse_dump() -> None:
     assert result == []
 
 
-def test_load_real_dump_target_ssh(monkeypatch) -> None:
+def test_load_real_dump_target_ssh(monkeypatch, tmp_path) -> None:
     """load_real_dump_target SSHs to cfg.servers["mid"] and returns parsed peers."""
     from awg_cascade_ctl import check as check_module
     from awg_cascade_ctl.ssh import SSHTransport
@@ -137,6 +137,7 @@ def test_load_real_dump_target_ssh(monkeypatch) -> None:
     mock_server.host = "vpn-mid.example.com"
     mock_server.port = 2222
     mock_server.username = "awg"
+    mock_server.ssh_key_path = str(tmp_path / "awg_mid_key")
     mock_cfg.servers = {"mid": mock_server}
     mock_cfg.timeouts.ssh_connect = 10
     mock_cfg.timeouts.ssh_command = 30
@@ -158,6 +159,8 @@ def test_load_real_dump_target_ssh(monkeypatch) -> None:
         return mock_transport
 
     monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
+
+    Path(tmp_path / "awg_mid_key").write_text("")
 
     peers = check_module.load_real_dump_target(mock_cfg, "mid")
     assert len(peers) == 1
@@ -221,7 +224,7 @@ def test_load_e2e_probes_skips_for_mid_out(monkeypatch) -> None:
     assert subprocess_called["value"] is False
 
 
-def test_load_real_dump_target_mid_with_key_options(monkeypatch) -> None:
+def test_load_real_dump_target_mid_with_key_options(monkeypatch, tmp_path) -> None:
     """load_real_dump_target for mid passes key_path and key_passphrase to SSHTransport."""
     from awg_cascade_ctl import check as check_module
     from awg_cascade_ctl.ssh import SSHTransport
@@ -252,21 +255,20 @@ def test_load_real_dump_target_mid_with_key_options(monkeypatch) -> None:
         return mock_transport
 
     monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
-    monkeypatch.setattr(
-        "awg_cascade_ctl.ssh.resolve_ssh_key_from_config",
-        lambda cfg, explicit_key_path=None: ("/custom/key", True),
-    )
+
+    custom_key = tmp_path / "custom_key"
+    custom_key.write_text("")
 
     peers = check_module.load_real_dump_target(
         mock_cfg,
         "mid",
-        key_path="/custom/key",
+        key_path=str(custom_key),
         key_passphrase="secret",
     )
 
     assert len(peers) == 1
     assert peers[0].peer_endpoint == "10.10.1.2:51820"
-    assert captured["key_path"] == "/custom/key"
+    assert captured["key_path"] == str(custom_key)
     assert captured["passphrase"] == "secret"
     assert captured["host"] == "vpn-mid.example.com"
 

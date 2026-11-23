@@ -318,7 +318,7 @@ def _run_check(
             if "mid" in cfg.servers and "out" in cfg.servers
             else None
         )
-        roles_active = True
+        roles_active = link_hosts is not None
 
     # Probe skip reason mirrors load_e2e_probes: it runs only for in/all with a config.
     if server_target not in ("in", "all"):
