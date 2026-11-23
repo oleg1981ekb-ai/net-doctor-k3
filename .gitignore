@@ -14,3 +14,4 @@ __pycache__/
 qdrant_storage/
 .playwright-mcp/
 *.egg-info/
+.kilo/workflows/todos.md
