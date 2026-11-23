@@ -587,8 +587,12 @@ def build_report(
 
 
 def report_to_json(report: CheckReport) -> str:
-    """Serialize a report to a single-line JSON string (strict mode)."""
-    return json.dumps(report.model_dump(mode="json", by_alias=True))
+    """Serialize a report to a single-line JSON string (strict mode).
+
+    schema_version flows through from the CheckReport model default ("1.0").
+    """
+    data = report.model_dump(mode="json", by_alias=True)
+    return json.dumps(data)
 
 
 def report_schema() -> dict:
@@ -716,5 +720,198 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
             )
     else:
         lines.append("  none")
+
+    return "\n".join(lines)
+
+
+def _is_tty() -> bool:
+    """Return True when stdout is a terminal (emoji allowed)."""
+    try:
+        return sys.stdout.isatty()
+    except OSError:
+        return False
+
+
+def format_summary(report: CheckReport, status: str | None = None) -> str:
+    """Render the single-line светофор summary for a check report.
+
+    TTY: emoji + text; non-TTY: ASCII bracketed status.
+    Always ends with ``exit: N``. Counter N/N ok over counted links only
+    (role=="link", clients excluded).
+    """
+    is_tty = _is_tty()
+
+    if status is None:
+        status = report.status
+
+    status_lower = status.lower() if isinstance(status, str) else "unknown"
+    if status_lower == "warning":
+        status_lower = "warn"
+
+    if status_lower == "pass":
+        status_disp = "🟢 PASS" if is_tty else "[PASS]"
+        exit_code = 0
+    elif status_lower == "warn":
+        status_disp = "🟡 WARN" if is_tty else "[WARN]"
+        exit_code = 3
+    elif status_lower == "fail":
+        status_disp = "🔴 FAIL" if is_tty else "[FAIL]"
+        exit_code = 1
+    else:
+        status_disp = "⚪ UNKNOWN" if is_tty else "[UNKNOWN]"
+        exit_code = 3
+
+    link_count = sum(1 for link in report.links if link.role == "link")
+    ok_count = sum(1 for link in report.links if link.role == "link" and link.ok)
+
+    line = f"{status_disp}   {ok_count}/{link_count} ok   exit: {exit_code}"
+    lines: list[str] = [line]
+
+    if status_lower in ("fail", "warn"):
+        added = 0
+        for link in report.links:
+            if added >= 3:
+                break
+            if link.role != "link" or link.ok:
+                continue
+            parts = [
+                f"   {link.interface} -> {link.peer_endpoint}",
+                f"keepalive={link.keepalive_status}",
+                f"handshake={'fresh' if link.handshake_fresh else 'STALE'}",
+            ]
+            lines.append(" ".join(parts))
+            added += 1
+
+    if status_lower == "unknown":
+        lines.append("   reason: SSH error")
+
+    return "\n".join(lines)
+
+
+def format_verbose(report: CheckReport, level: int) -> str:
+    """Render verbose output for a check report.
+
+    level=1: светофор line + blank line + Links (counted) section + Clients
+    (not counted) section + E2E section + ℹ note line.
+    level=2: level=1 PLUS per-peer introspect block.
+    """
+    is_tty = _is_tty()
+    lines: list[str] = []
+
+    # Fresh line with separator
+    lines.append("──────────────────────────────────────────────────")
+
+    # Status line
+    if report.status == "pass":
+        status_disp = "🟢 PASS" if is_tty else "[PASS]"
+        exit_code = 0
+    elif report.status == "warning":
+        status_disp = "🟡 WARN" if is_tty else "[WARN]"
+        exit_code = 3
+    elif report.status == "fail":
+        status_disp = "🔴 FAIL" if is_tty else "[FAIL]"
+        exit_code = 1
+    else:
+        status_disp = "⚪ UNKNOWN" if is_tty else "[UNKNOWN]"
+        exit_code = 3
+
+    link_count = sum(1 for link in report.links if link.role == "link")
+    ok_count = sum(1 for link in report.links if link.role == "link" and link.ok)
+    lines.append(f"{status_disp}   {ok_count}/{link_count} ok   exit: {exit_code}")
+    lines.append("")
+
+    # Links (counted) section
+    counted_links = [l for l in report.links if l.role == "link"]
+    client_links = [l for l in report.links if l.role == "client"]
+
+    lines.append("Links (counted)")
+    ka_w = max(
+        [len(l.keepalive_status) for l in counted_links] + [9]
+    )  # "keepalive" is 9
+    hs_w = max(
+        [len("fresh" if l.handshake_fresh else "STALE") for l in counted_links] + [5]
+    )
+
+    if counted_links:
+        for link in counted_links:
+            ka_text = link.keepalive_status
+            if link.keepalive_status == "MISMATCH":
+                ka_text = f"MISMATCH (got {link.persistent_keepalive}, expected {link.keepalive_min}..{link.keepalive_max})"
+            passive_marker = " (receiving end)" if link.keepalive_passive else ""
+            hs = "fresh" if link.handshake_fresh else "STALE"
+            ok_mark = "✅" if is_tty else "OK"
+            fail_mark = "❌" if is_tty else "FAIL"
+            warn_mark = "⚠️" if is_tty else "WARN"
+            status_mark = (
+                ok_mark
+                if link.ok
+                else (warn_mark if link.keepalive_status != "OK" else fail_mark)
+            )
+            ka_field = ka_text.ljust(ka_w)
+            hs_field = hs.ljust(hs_w)
+            lines.append(
+                f"  {link.interface} -> {link.peer_endpoint}  "
+                f"keepalive={ka_field}  handshake={hs_field}  {status_mark}{passive_marker}"
+            )
+    else:
+        lines.append("  none")
+
+    lines.append("")
+
+    # Clients (not counted) section — always shown
+    lines.append("Clients (not counted)")
+    if client_links:
+        for link in client_links:
+            ok_mark = "⚪" if is_tty else "OK"
+            lines.append(f"  {link.interface} -> {link.peer_endpoint}  {ok_mark}")
+    else:
+        lines.append("  none")
+
+    lines.append("")
+
+    # E2E section
+    lines.append("E2E")
+    if report.e2e_probes:
+        for probe in report.e2e_probes:
+            ok_mark = "✅" if is_tty else "OK"
+            fail_mark = "❌" if is_tty else "FAIL"
+            mark = ok_mark if probe.ok else fail_mark
+            lines.append(
+                f"  {probe.source} ({probe.url}): {probe.ipv4 or 'n/a'}, ok={'yes' if probe.ok else 'no'} {mark}"
+            )
+    else:
+        lines.append("  — skipped (not in/all)")
+    lines.append("")
+
+    # ℹ note line (single line)
+    passive_shown = any(l.keepalive_passive for l in counted_links)
+    if passive_shown:
+        lines.append(
+            "ℹ note: keepalive=OFF on a link with a fresh handshake is normal on the receiving end (the other server sends the keepalives)."
+        )
+    else:
+        lines.append("ℹ note: —")
+
+    # level=2: per-peer introspect block
+    if level >= 2:
+        lines.append("")
+        lines.append("── Introspect (debug) ──")
+        for link in report.links:
+            lines.append(f"  [{link.role}] {link.interface} -> {link.peer_endpoint}")
+            lines.append(
+                f"    raw: {link.interface}<TAB>..."
+                f"<TAB>{link.peer_endpoint}<TAB>...<TAB>keepalive={link.persistent_keepalive}"
+            )
+            lines.append(
+                f"    parse: keepalive_min={link.keepalive_min} "
+                f"keepalive_max={link.keepalive_max} "
+                f"handshake_age={link.latest_handshake_age_sec}"
+            )
+            lines.append(
+                "    file:line: src/awg_cascade_ctl/check.py:379 (parse_awg_dump), "
+                "src/awg_cascade_ctl/check.py:493 (audit_peers)"
+            )
+            lines.append("    cmd: awg show all dump")
+            lines.append("")
 
     return "\n".join(lines)

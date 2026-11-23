@@ -6,6 +6,7 @@ import os
 import select
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -17,12 +18,15 @@ from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
     KEEPALIVE_MAX,
     KEEPALIVE_MIN,
+    CheckReport,
     SSHDumpError,
     audit_peers,
     build_report,
     describe_check_plan,
     describe_ssh_error,
     format_report_text,
+    format_summary,
+    format_verbose,
     load_e2e_probes,
     load_real_dump,
     report_schema,
@@ -252,6 +256,8 @@ def _should_show_intro(json_output: bool) -> bool:
 def _run_check(
     json_output: bool,
     color: Literal["auto", "always", "never"] = "auto",
+    schema: Literal["v1", "v2"] = "v2",
+    verbose_level: int = 0,
     config_path: str | Path | None = None,
     dump_file: str | Path | None = None,
     server_target: Literal["in", "mid", "out", "all"] = "in",
@@ -380,6 +386,15 @@ def _run_check(
             except (KeyboardInterrupt, EOFError):
                 typer.echo("\nAborted.", err=True)
                 raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+        elif encrypted_err:
+            # Cannot prompt (no ask_pass or not a TTY): fail fast with a usage
+            # error instead of opening the interactive menu.
+            typer.echo(
+                "ERROR: SSH key is encrypted and no passphrase was provided "
+                "(use --key-passphrase or run interactively with --ask-pass)",
+                err=True,
+            )
+            return ExitCode.USAGE_ERROR.value
         else:
             if isinstance(exc, SSHDumpError):
                 typer.echo(
@@ -413,9 +428,22 @@ def _run_check(
     use_color = _use_color(color)
 
     if json_output:
-        typer.echo(report_to_json(report))
+        json_text = report_to_json(report)
+        typer.echo(json_text)
     else:
-        typer.echo(format_report_text(report, use_color=use_color))
+        if schema == "v1":
+            # Deprecated v1: triple status/overall/Result, stderr warning
+            typer.echo(
+                "awg-ctl: --schema v1 is deprecated; v1 will be removed in 0.3.",
+                err=True,
+            )
+            typer.echo(format_report_text(report, use_color=use_color))
+        else:
+            # v2 default: светофор line only (no triple status/overall/Result)
+            if verbose_level >= 1:
+                typer.echo(format_verbose(report, verbose_level))
+            else:
+                typer.echo(format_summary(report))
 
     if unix:
         typer.echo(
@@ -449,6 +477,19 @@ def check(
         "auto",
         "--color",
         help="Force colour mode: auto (default), always, or never.",
+    ),
+    schema: Literal["v1", "v2"] = typer.Option(
+        "v2",
+        "--schema",
+        help="Output schema version: v2 (default, светофор + verbose when -v) or "
+        "v1 (old text format, deprecated).",
+    ),
+    verbose_level: int = typer.Option(
+        0,
+        "-v",
+        "--verbose",
+        count=True,
+        help="Verbose level: 1 for светофор + details, 2 for debug introspect (-vv).",
     ),
     config_path: str | None = typer.Option(
         None,
@@ -499,6 +540,7 @@ def check(
     ),
 ) -> None:
     """Run cascade check and E2E probe."""
+    """Run cascade check and E2E probe."""
     # Mutually exclusive: --strict and --warn-as-ok cannot both be set.
     usage_error = validate_exit_flags(strict, warn_as_ok)
     if usage_error is not None:
@@ -520,6 +562,8 @@ def check(
     exit_code = _run_check(
         json_output=json_output,
         color=color,
+        schema=schema,
+        verbose_level=verbose_level,
         config_path=config_path,
         dump_file=dump_file,
         server_target=final_target,
@@ -1029,6 +1073,375 @@ def menu(
         else:
             typer.echo(f"Unknown command: {cmd}")
             continue
+
+
+@app.command(name="now")
+def now(
+    config_path: str = typer.Option(
+        "./cascade.yaml",
+        "--config",
+        "-c",
+        help="Path to cascade.yaml for SSH-based real data loading.",
+    ),
+    key_path: str | None = typer.Option(
+        None,
+        "--key-path",
+        help="Path to SSH private key file (passed to check).",
+    ),
+    key_passphrase: str | None = typer.Option(
+        None,
+        "--key-passphrase",
+        help="Passphrase for encrypted SSH key (passed to check).",
+    ),
+    ask_pass: bool = typer.Option(
+        True,
+        "--ask-pass",
+        help="Prompt for passphrase when key is encrypted (passed to check).",
+    ),
+) -> None:
+    """Interactive cascade overview (TTY only)."""
+    from typer.models import OptionInfo
+
+    if isinstance(key_path, OptionInfo):
+        key_path = None
+    if isinstance(key_passphrase, OptionInfo):
+        key_passphrase = None
+    if isinstance(ask_pass, OptionInfo):
+        ask_pass = True
+
+    if not sys.stdout.isatty() or not sys.stdin.isatty():
+        # Non-TTY: fall back to default check output and exit
+        exit_code = _run_check(
+            json_output=False,
+            color="auto",
+            config_path=config_path,
+            dump_file=None,
+            server_target="all",
+            key_path=key_path,
+            key_passphrase=key_passphrase,
+            ask_pass=ask_pass,
+        )
+        raise typer.Exit(code=exit_code)
+
+    if not QUESTIONARY_AVAILABLE:
+        typer.echo(
+            "ERROR: questionary is not installed. "
+            "Install with: pip install questionary",
+            err=True,
+        )
+        raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+    # Cache for reports
+    reports: dict[str, CheckReport] = {}
+    cache_timestamp: dict[str, float] = {}
+
+    def fetch_report(server: str) -> CheckReport:
+        """Fetch a report for a specific server, using cache if recent."""
+        import time
+
+        now_ts = time.time()
+        if server in reports and now_ts - cache_timestamp.get(server, 0) < 5:
+            return reports[server]
+
+        from awg_cascade_ctl.config import CascadeConfig
+
+        try:
+            cfg = CascadeConfig.load(config_path)
+        except FileNotFoundError:
+            typer.echo(
+                f"ERROR: config not found: {config_path}; use --config", err=True
+            )
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+        except ValidationError as exc:
+            typer.echo(f"ERROR: invalid config: {exc}", err=True)
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+
+        min_keepalive = cfg.check.keepalive_min
+        max_keepalive = cfg.check.keepalive_max
+
+        link_hosts = frozenset(
+            {
+                cfg.servers["in"].host,
+                cfg.servers["mid"].host,
+                cfg.servers["out"].host,
+            }
+        )
+        roles_active = True
+
+        try:
+            peers = load_real_dump(
+                config_path=config_path,
+                dump_file=None,
+                server_target=server,  # type: ignore[arg-type]
+                key_path=key_path,
+                key_passphrase=key_passphrase,
+            )
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+            if encrypted_err and ask_pass and sys.stdin.isatty():
+                # Interactive prompt — same pattern as check --ask-pass (cli.py:364)
+                try:
+                    from typer import prompt
+
+                    new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
+                    peers = load_real_dump(
+                        config_path=config_path,
+                        dump_file=None,
+                        server_target=server,
+                        key_path=key_path,
+                        key_passphrase=new_pass,
+                    )
+                except RuntimeError as retry_exc:
+                    retry_msg = str(retry_exc).lower()
+                    if "invalid key" in retry_msg or "passwordrequired" in retry_msg:
+                        typer.echo(
+                            "ERROR: неверная парольная фраза для SSH ключа",
+                            err=True,
+                        )
+                        raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                    raise
+                # retry succeeded — continue to audit_peers below
+            else:
+                # Pipe or ask_pass=False (or other RuntimeError type without prompt)
+                if encrypted_err:
+                    # Cannot prompt: fail with a usage error; the menu must not open.
+                    typer.echo(
+                        "ERROR: SSH key is encrypted and no passphrase was provided "
+                        "(use --key-passphrase or run interactively with --ask-pass)",
+                        err=True,
+                    )
+                    raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                if isinstance(exc, SSHDumpError):
+                    typer.echo(
+                        describe_ssh_error(exc.exc, exc.server, exc.port, exc.key_path),
+                        err=True,
+                    )
+                    raise typer.Exit(code=ExitCode.CRITICAL.value)
+                # For other RuntimeError types (not SSHDumpError), return
+                # the error report as the original code did
+                report = CheckReport(
+                    schema_id="awg-ctl/check/v1",
+                    schema_version="1.0",
+                    generated_at=datetime.now(UTC).isoformat(),
+                    cascade="cascade-alpha",
+                    links=[],
+                    e2e_probes=[],
+                    ok=False,
+                    status="fail",
+                    source="ssh",
+                )
+                reports[server] = report
+                cache_timestamp[server] = now_ts
+                return report
+        except (OSError, ValueError):
+            # Config/IO errors — original behaviour: error report in overview
+            report = CheckReport(
+                schema_id="awg-ctl/check/v1",
+                schema_version="1.0",
+                generated_at=datetime.now(UTC).isoformat(),
+                cascade="cascade-alpha",
+                links=[],
+                e2e_probes=[],
+                ok=False,
+                status="fail",
+                source="ssh",
+            )
+            reports[server] = report
+            cache_timestamp[server] = now_ts
+            return report
+
+        links = audit_peers(
+            peers,
+            now_unix=int(time.time()),
+            min_keepalive=min_keepalive,
+            max_keepalive=max_keepalive,
+            link_hosts=link_hosts,
+        )
+        probes = load_e2e_probes(config_path=config_path, server_target=server)
+        report = build_report(
+            "cascade-alpha", links, probes, source="ssh", roles_active=roles_active
+        )
+        reports[server] = report
+        cache_timestamp[server] = now_ts
+        return report
+
+    def get_overall_emoji(reports_dict: dict[str, CheckReport]) -> str:
+        """Determine overall status emoji from all server reports."""
+        if not reports_dict:
+            return "⚪"
+        has_fail = any(r.status == "fail" for r in reports_dict.values())
+        has_warn = any(r.status == "warning" for r in reports_dict.values())
+        has_pass = any(r.status == "pass" for r in reports_dict.values())
+        if has_fail:
+            return "🔴"
+        if has_warn:
+            return "🟡"
+        if has_pass:
+            return "🟢"
+        return "⚪"
+
+    def render_overview() -> str:
+        """Render the level 0 overview table."""
+        # Pass 1: collect reports into a local dict before computing overall
+        collected: dict[str, CheckReport] = {}
+        for pos in ("in", "mid", "out"):
+            report = fetch_report(pos)
+            collected[pos] = report
+
+        is_tty = sys.stdout.isatty()
+        lines = []
+        overall = get_overall_emoji(collected)
+        lines.append(f"awg-ctl now  [{overall} Overall]")
+        lines.append(
+            "┌──────┬──────────┬────────────┬───────┬──────────────────────────────┐"
+        )
+        lines.append(
+            "│ Pos  │ Server   │ Status     │ E2E   │ Links (ok/total)             │"
+        )
+        lines.append(
+            "├──────┼──────────┼────────────┼───────┼──────────────────────────────┤"
+        )
+        for idx, pos in enumerate(("in", "mid", "out"), 1):
+            report = collected[pos]
+            status = report.status
+            if status == "pass":
+                status_disp = "🟢 PASS" if is_tty else "[PASS]"
+            elif status == "warning":
+                status_disp = "🟡 WARN" if is_tty else "[WARN]"
+            elif status == "fail":
+                status_disp = "🔴 FAIL" if is_tty else "[FAIL]"
+            else:
+                status_disp = "⚪ UNKN" if is_tty else "[UNKN]"
+            e2e_ok = sum(1 for p in report.e2e_probes if p.ok)
+            e2e_total = len(report.e2e_probes)
+            e2e_disp = f"{e2e_ok}/{e2e_total}" if e2e_total > 0 else "—"
+            link_ok = sum(1 for l in report.links if l.role == "link" and l.ok)
+            link_total = sum(1 for l in report.links if l.role == "link")
+            link_disp = f"{link_ok}/{link_total}"
+            lines.append(
+                f"│ {idx}    │ {pos:4s}   │ {status_disp} │ {e2e_disp:5s} │ {link_disp:<28} │"
+            )
+        lines.append(
+            "└──────┴──────────┴────────────┴───────┴──────────────────────────────┘"
+        )
+        lines.append("")
+        lines.append("↑↓ select  enter details  c check  d diagnose  r refresh  q quit")
+        return "\n".join(lines)
+
+    # Main menu loop using questionary select
+    servers = ["in", "mid", "out"]
+    selected_idx = 0
+
+    while True:
+        typer.echo(render_overview())
+        try:
+            choice = questionary.select(
+                "Select action:",
+                choices=[
+                    questionary.Choice(
+                        title=f"1. {servers[0]}  (details)", value=("detail", 0)
+                    ),
+                    questionary.Choice(
+                        title=f"2. {servers[1]}  (details)", value=("detail", 1)
+                    ),
+                    questionary.Choice(
+                        title=f"3. {servers[2]}  (details)", value=("detail", 2)
+                    ),
+                    questionary.Choice(
+                        title="c. Check selected", value=("check", selected_idx)
+                    ),
+                    questionary.Choice(
+                        title="d. Diagnose selected", value=("diagnose", selected_idx)
+                    ),
+                    questionary.Choice(title="r. Refresh all", value=("refresh", -1)),
+                    questionary.Choice(title="q. Quit", value=("quit", -1)),
+                ],
+                use_indicator=True,
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if choice is None:
+            break
+
+        action, idx = choice
+        if action == "quit":
+            break
+        elif action == "refresh":
+            reports.clear()
+            cache_timestamp.clear()
+            continue
+        elif action == "detail":
+            selected_idx = idx
+            server = servers[idx]
+            # Level 1: server detail
+            while True:
+                report = fetch_report(server)
+                typer.echo(format_verbose(report, 1))
+                typer.echo(
+                    "\nv verbose  V debug  j json  c check  d diagnose  esc back"
+                )
+                try:
+                    sub_choice = questionary.select(
+                        "Action:",
+                        choices=[
+                            questionary.Choice(title="v. Verbose (level 1)", value="v"),
+                            questionary.Choice(title="V. Debug (level 2)", value="V"),
+                            questionary.Choice(title="j. JSON output", value="j"),
+                            questionary.Choice(title="c. Check", value="c"),
+                            questionary.Choice(title="d. Diagnose", value="d"),
+                            questionary.Choice(
+                                title="esc. Back to overview", value="esc"
+                            ),
+                        ],
+                        use_indicator=True,
+                    ).ask()
+                except (KeyboardInterrupt, EOFError):
+                    break
+
+                if sub_choice is None or sub_choice == "esc":
+                    break
+                elif sub_choice == "V":
+                    report = fetch_report(server)
+                    typer.echo(format_verbose(report, 2))
+                    typer.echo("\nj json  esc back")
+                    sub2 = questionary.select(
+                        "Action:",
+                        choices=[
+                            questionary.Choice(title="j. JSON output", value="j"),
+                            questionary.Choice(title="esc. Back", value="esc"),
+                        ],
+                        use_indicator=True,
+                    ).ask()
+                    if sub2 == "j":
+                        report = fetch_report(server)
+                        typer.echo(report_to_json(report))
+                        typer.echo("Press Enter to continue...")
+                        questionary.text("").ask()
+                elif sub_choice == "j":
+                    report = fetch_report(server)
+                    typer.echo(report_to_json(report))
+                    typer.echo("Press Enter to continue...")
+                    questionary.text("").ask()
+                elif sub_choice == "c":
+                    report = fetch_report(server)
+                    typer.echo(format_summary(report))
+                    typer.echo("Press Enter to continue...")
+                    questionary.text("").ask()
+                elif sub_choice == "d":
+                    typer.echo(f"Diagnose {server} - not yet implemented")
+                    typer.echo("Press Enter to continue...")
+                    questionary.text("").ask()
+        elif action == "check":
+            report = fetch_report(servers[idx])
+            typer.echo(format_summary(report))
+            typer.echo("Press Enter to continue...")
+            questionary.text("").ask()
+        elif action == "diagnose":
+            typer.echo(f"Diagnose {servers[idx]} - not yet implemented")
+            typer.echo("Press Enter to continue...")
+            questionary.text("").ask()
 
 
 config_app = typer.Typer(help="Configuration commands.")
