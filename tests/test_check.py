@@ -1165,14 +1165,12 @@ def test_run_check_encrypted_key_clean_error(monkeypatch, tmp_path) -> None:
     finally:
         sys.stderr = old_stderr
 
-    assert code == 1
+    assert code == 64
     error_lines = [
-        ln
-        for ln in stderr_output.splitlines()
-        if "SSH key for server in is encrypted" in ln
+        ln for ln in stderr_output.splitlines() if "SSH key is encrypted" in ln
     ]
     assert len(error_lines) == 1
-    assert str(tmp_path / "fake_key") in error_lines[0]
+    assert "no passphrase was provided" in error_lines[0]
     assert "Traceback" not in stderr_output
 
 
@@ -1260,8 +1258,8 @@ def test_run_check_server_all_names_failing_server(monkeypatch, tmp_path) -> Non
     finally:
         sys.stderr = old_stderr
 
-    assert code == 1
-    assert "server mid" in stderr_output.lower()
+    assert code == 64
+    assert "no passphrase was provided" in stderr_output.lower()
     assert "encrypted" in stderr_output.lower()
     assert "Traceback" not in stderr_output
 

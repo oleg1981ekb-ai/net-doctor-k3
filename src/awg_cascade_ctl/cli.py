@@ -386,6 +386,15 @@ def _run_check(
             except (KeyboardInterrupt, EOFError):
                 typer.echo("\nAborted.", err=True)
                 raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+        elif encrypted_err:
+            # Cannot prompt (no ask_pass or not a TTY): fail fast with a usage
+            # error instead of opening the interactive menu.
+            typer.echo(
+                "ERROR: SSH key is encrypted and no passphrase was provided "
+                "(use --key-passphrase or run interactively with --ask-pass)",
+                err=True,
+            )
+            return ExitCode.USAGE_ERROR.value
         else:
             if isinstance(exc, SSHDumpError):
                 typer.echo(
@@ -1068,8 +1077,8 @@ def menu(
 
 @app.command(name="now")
 def now(
-    config_path: str | None = typer.Option(
-        None,
+    config_path: str = typer.Option(
+        "./cascade.yaml",
         "--config",
         "-c",
         help="Path to cascade.yaml for SSH-based real data loading.",
@@ -1134,26 +1143,18 @@ def now(
         if server in reports and now_ts - cache_timestamp.get(server, 0) < 5:
             return reports[server]
 
-        if config_path is not None:
-            from awg_cascade_ctl.config import CascadeConfig
+        from awg_cascade_ctl.config import CascadeConfig
 
+        try:
             cfg = CascadeConfig.load(config_path)
-        else:
-            # Demo mode
-            from awg_cascade_ctl.check import _demo_dump, parse_awg_dump
-
-            peers = parse_awg_dump(_demo_dump())
-            links = audit_peers(
-                peers,
-                now_unix=int(time.time()),
-                min_keepalive=KEEPALIVE_MIN,
-                max_keepalive=KEEPALIVE_MAX,
+        except FileNotFoundError:
+            typer.echo(
+                f"ERROR: config not found: {config_path}; use --config", err=True
             )
-            probes = []
-            report = build_report("cascade-alpha", links, probes, source="demo")
-            reports[server] = report
-            cache_timestamp[server] = now_ts
-            return report
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
+        except ValidationError as exc:
+            typer.echo(f"ERROR: invalid config: {exc}", err=True)
+            raise typer.Exit(code=ExitCode.USAGE_ERROR)
 
         min_keepalive = cfg.check.keepalive_min
         max_keepalive = cfg.check.keepalive_max
@@ -1175,8 +1176,66 @@ def now(
                 key_path=key_path,
                 key_passphrase=key_passphrase,
             )
-        except (RuntimeError, OSError, ValueError):
-            # Return an error report
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            encrypted_err = "passwordrequired" in msg or "encrypted" in msg
+            if encrypted_err and ask_pass and sys.stdin.isatty():
+                # Interactive prompt — same pattern as check --ask-pass (cli.py:364)
+                try:
+                    from typer import prompt
+
+                    new_pass = prompt("SSH key passphrase (hidden)", hide_input=True)
+                    peers = load_real_dump(
+                        config_path=config_path,
+                        dump_file=None,
+                        server_target=server,
+                        key_path=key_path,
+                        key_passphrase=new_pass,
+                    )
+                except RuntimeError as retry_exc:
+                    retry_msg = str(retry_exc).lower()
+                    if "invalid key" in retry_msg or "passwordrequired" in retry_msg:
+                        typer.echo(
+                            "ERROR: неверная парольная фраза для SSH ключа",
+                            err=True,
+                        )
+                        raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                    raise
+                # retry succeeded — continue to audit_peers below
+            else:
+                # Pipe or ask_pass=False (or other RuntimeError type without prompt)
+                if encrypted_err:
+                    # Cannot prompt: fail with a usage error; the menu must not open.
+                    typer.echo(
+                        "ERROR: SSH key is encrypted and no passphrase was provided "
+                        "(use --key-passphrase or run interactively with --ask-pass)",
+                        err=True,
+                    )
+                    raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
+                if isinstance(exc, SSHDumpError):
+                    typer.echo(
+                        describe_ssh_error(exc.exc, exc.server, exc.port, exc.key_path),
+                        err=True,
+                    )
+                    raise typer.Exit(code=ExitCode.CRITICAL.value)
+                # For other RuntimeError types (not SSHDumpError), return
+                # the error report as the original code did
+                report = CheckReport(
+                    schema_id="awg-ctl/check/v1",
+                    schema_version="1.0",
+                    generated_at=datetime.now(UTC).isoformat(),
+                    cascade="cascade-alpha",
+                    links=[],
+                    e2e_probes=[],
+                    ok=False,
+                    status="fail",
+                    source="ssh",
+                )
+                reports[server] = report
+                cache_timestamp[server] = now_ts
+                return report
+        except (OSError, ValueError):
+            # Config/IO errors — original behaviour: error report in overview
             report = CheckReport(
                 schema_id="awg-ctl/check/v1",
                 schema_version="1.0",

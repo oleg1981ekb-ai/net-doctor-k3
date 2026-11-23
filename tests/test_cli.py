@@ -544,9 +544,17 @@ def test_check_command_server_flag_skips_pause(monkeypatch) -> None:
 def test_now_no_tty_returns_default(monkeypatch) -> None:
     """now without TTY falls back to default check output and exits."""
     from awg_cascade_ctl import check as check_module
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
 
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr(check_module, "_is_tty", lambda: False)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
     result = runner.invoke(app, ["now"])
     assert result.exit_code == 0
     assert "[PASS]" in result.output
@@ -559,7 +567,7 @@ def test_now_overall_aggregate(monkeypatch) -> None:
     from unittest import mock
 
     from awg_cascade_ctl import cli as cli_module
-    from awg_cascade_ctl.check import CheckReport
+    from awg_cascade_ctl.check import CheckReport, parse_awg_dump
 
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
@@ -568,6 +576,12 @@ def test_now_overall_aggregate(monkeypatch) -> None:
 
     mock_select = mock.MagicMock()
     monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
 
     def make_report(status: str) -> CheckReport:
         return CheckReport(
@@ -645,7 +659,7 @@ def test_now_overall_first_render_pass(monkeypatch) -> None:
     from unittest import mock
 
     from awg_cascade_ctl import cli as cli_module
-    from awg_cascade_ctl.check import CheckReport
+    from awg_cascade_ctl.check import CheckReport, parse_awg_dump
 
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
@@ -654,6 +668,12 @@ def test_now_overall_first_render_pass(monkeypatch) -> None:
 
     mock_select = mock.MagicMock()
     monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
 
     def make_report(status: str) -> CheckReport:
         return CheckReport(
@@ -687,6 +707,7 @@ def test_now_enter_opens_server_level(monkeypatch) -> None:
     from unittest import mock
 
     from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
 
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
@@ -700,6 +721,12 @@ def test_now_enter_opens_server_level(monkeypatch) -> None:
         None,  # Quit from level 0
     ]
     monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
 
     result = runner.invoke(app, ["now"])
     assert result.exit_code == 0
@@ -715,6 +742,9 @@ def test_now_v_opens_verbose(monkeypatch) -> None:
     """v -> level 1 (Links/Clients/E2E/note); V -> level 2 (introspect)."""
     from unittest import mock
 
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
     monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
@@ -722,6 +752,12 @@ def test_now_v_opens_verbose(monkeypatch) -> None:
 
     mock_select = mock.MagicMock()
     monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
 
     # v -> level 1
     mock_select.return_value.ask.side_effect = [
@@ -754,6 +790,11 @@ def test_now_v_opens_verbose(monkeypatch) -> None:
 
 def test_now_j_opens_json(monkeypatch) -> None:
     """j -> server JSON in pager; assert valid JSON with schema_version 1.0."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
     monkeypatch.setattr("time.time", lambda: 1700000030)
     monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
     monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
@@ -767,6 +808,12 @@ def test_now_j_opens_json(monkeypatch) -> None:
         None,  # Quit from level 0
     ]
     monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
 
     mock_text = mock.MagicMock()
     mock_text.return_value.ask.return_value = ""
@@ -848,3 +895,118 @@ def test_now_r_refresh_caches(monkeypatch) -> None:
     # Refresh clears cache, next overview: 3 more loads.
     # Enter + Esc + final overview: all cached -> no new loads.
     assert calls["count"] == 6
+
+
+def test_now_defaults_to_cascade_yaml(monkeypatch) -> None:
+    """now without --config resolves to ./cascade.yaml (same as check)."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    monkeypatch.setattr(questionary, "select", mock_select)
+    mock_select.return_value.ask.side_effect = [None]
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_load_real_dump(**kw):
+        captured.update(kw)
+        return mock_peers
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert captured.get("config_path") == "./cascade.yaml"
+
+
+def test_now_missing_config_errors(monkeypatch, tmp_path) -> None:
+    """now without a valid ./cascade.yaml exits non-zero with a config error."""
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.chdir(tmp_path)  # no cascade.yaml here
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code != 0
+    assert "config" in result.output.lower()
+
+
+def test_now_ask_pass_prompts(monkeypatch) -> None:
+    """now prompts for passphrase on encrypted key and retries with it."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.side_effect = [None]
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    prompt_calls = []
+
+    def fake_prompt(*args, **kwargs):
+        prompt_calls.append(args)
+        return "test-passphrase"
+
+    monkeypatch.setattr("typer.prompt", fake_prompt)
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t0.0.0.0/0\t1700000000\t1000\t2000\t25\n"
+    )
+
+    calls: list[dict] = []
+
+    def fake_load_real_dump(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise RuntimeError("SSH key is encrypted")
+        return mock_peers
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "awg-ctl now" in result.output
+    assert "ERROR" not in result.output
+    assert prompt_calls, "typer.prompt should have been called for the passphrase"
+    assert len(calls) >= 2, (
+        f"load_real_dump should be called at least twice, got {len(calls)}"
+    )
+    assert calls[1].get("key_passphrase") == "test-passphrase"
+
+
+def test_now_encrypted_no_ask_pass_errors(monkeypatch) -> None:
+    """now with encrypted key, no ask-pass / pipe exits 64 and does not open the menu."""
+    from awg_cascade_ctl import cli as cli_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+
+    def fake_load_real_dump(**kw):
+        raise RuntimeError("SSH key is encrypted")
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+
+    # Pipe mode: isatty False (default for CliRunner); --ask-pass default True
+    # but non-TTY path prevents prompting. Encrypted key should yield exit 64.
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 64
+    combined = (result.output + result.stderr).lower()
+    assert "encrypted" in combined
+    # The interactive menu must not open on this error path.
+    assert "select action" not in combined
+    assert "awg-ctl now" not in combined
