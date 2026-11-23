@@ -123,6 +123,10 @@ check:
 - `keepalive_min` must be <= `keepalive_max`, otherwise a `ValueError` is raised.
 - Peers with `persistent_keepalive` of 0 or "off" are always flagged as `OFF` regardless of range.
 
+**Receiving-end rule for keepalive `OFF`:** in a cascade in -> mid -> out the peer that starts the tunnel (the initiator) sends keepalives; the receiving end sets the peer's keepalive to `OFF` (0). When the receiving end reports `OFF` but the handshake is fresh, `check` accepts it as healthy and flags the link as passive (`keepalive_passive: true`).
+
+**Known limitation:** a single server cannot distinguish the receiving end from a misconfiguration, so a passive link only resolves correctly for `in`, `mid` and `out` taken together (`--server all`); a paired check is not implemented yet.
+
 ### 3.8 `log_level` — Logging
 
 ```yaml
