@@ -6,6 +6,8 @@ from unittest import mock
 
 from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
+    CheckReport,
+    E2EProbe,
     RawPeer,
     audit_peers,
     build_report,
@@ -20,12 +22,12 @@ from awg_cascade_ctl.check import (
 )
 
 DUMP_LINE = (
-    "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
 )
 
 # AmneziaWG format with extra obfuscation fields (jitter, port, etc.)
 DUMP_LINE_AMNEZIA = (
-    "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t"
+    "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t"
     "1700000000\t1000\t2000\t25\tjitter=40\tport=12345\n"
 )
 
@@ -36,7 +38,7 @@ def test_parse_awg_dump_single_peer() -> None:
     assert len(peers) == 1
     peer = peers[0]
     assert peer.interface == "awg1"
-    assert peer.peer_endpoint == "10.10.1.1:51820"
+    assert peer.peer_endpoint == "10.0.0.1:51820"
     assert peer.latest_handshake_unix == 1700000000
     assert peer.persistent_keepalive == 25
 
@@ -46,7 +48,7 @@ def test_parse_awg_dump_amnezia_extra_fields() -> None:
     peers = parse_awg_dump(DUMP_LINE_AMNEZIA)
     assert len(peers) == 1
     assert peers[0].interface == "awg1"
-    assert peers[0].peer_endpoint == "10.10.1.1:51820"
+    assert peers[0].peer_endpoint == "10.0.0.1:51820"
     assert peers[0].persistent_keepalive == 25
 
 
@@ -164,7 +166,7 @@ def test_format_report_text_golden_no_color() -> None:
     assert "generated_at:" in text
     assert "Links:" in text
     assert "1/1 ok" in text
-    assert "awg1 -> 10.10.1.1:51820" in text
+    assert "awg1 -> 10.0.0.1:51820" in text
     assert "E2E probes:" in text
     assert "\n  none" in text  # no probes list items
 
@@ -189,9 +191,7 @@ def test_report_to_json_zero_links() -> None:
 
 def test_parse_awg_dump_handles_off_keepalive() -> None:
     """Real AWG dump uses 'off' for keepalive; should parse as 0."""
-    line = (
-        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
-    )
+    line = "awg0\tPUB\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
     peers = parse_awg_dump(line)
     assert len(peers) == 1
     assert peers[0].persistent_keepalive == 0
@@ -201,7 +201,7 @@ def test_parse_awg_dump_interface_plus_peer() -> None:
     """One interface line + one real peer line -> one peer in list."""
     interface = "awg0\tPUBKEY\tPSK\t51821\t10.10.1.0/30\t1700000000\t1000\t2000\t5\t60\t1\t2\t3\t4"
     peer = (
-        "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+        "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
     peers = parse_awg_dump(interface + "\n" + peer)
     assert len(peers) == 1
@@ -212,7 +212,7 @@ def test_parse_awg_dump_interface_line_15_fields() -> None:
     """Interface line (15 fields) is skipped, following peer line is parsed."""
     interface_15 = "awg0\tPUBKEY\tPSK\t51821\t10.10.1.0/30\t1700000000\t1000\t2000\t5\t60\t1\t2\t3\t4\textra"
     peer = (
-        "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+        "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
     peers = parse_awg_dump(interface_15 + "\n" + peer)
     assert len(peers) == 1
@@ -249,7 +249,9 @@ def test_audit_peers_keepalive_0_off() -> None:
     peers_off = parse_awg_dump(DUMP_LINE.replace("\t25\n", "\t0\n"))
     audits = audit_peers(peers_off, now_unix=1700000030)
     assert audits[0].keepalive_status == "OFF"
-    off_line = "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    off_line = (
+        "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    )
     peers_off3 = parse_awg_dump(off_line)
     audits_off = audit_peers(peers_off3, now_unix=1700000030)
     assert audits_off[0].keepalive_status == "OFF"
@@ -308,7 +310,7 @@ def test_check_with_config_keepalive_in_range() -> None:
                 (),
                 {
                     "interface": "awg1",
-                    "peer_endpoint": "10.10.1.1:51820",
+                    "peer_endpoint": "10.0.0.1:51820",
                     "latest_handshake_unix": 1700000000,
                     "persistent_keepalive": 50,
                 },
@@ -370,7 +372,7 @@ def test_check_with_config_keepalive_out_of_range() -> None:
                 (),
                 {
                     "interface": "awg1",
-                    "peer_endpoint": "10.10.1.1:51820",
+                    "peer_endpoint": "10.0.0.1:51820",
                     "latest_handshake_unix": 1700000000,
                     "persistent_keepalive": 50,
                 },
@@ -407,7 +409,9 @@ def test_format_report_text_keepalive_off() -> None:
     text0 = format_report_text(report0, use_color=False)
     assert "OFF" in text0
     # Test with off literal
-    off_line = "awg1\tPUBKEY\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    off_line = (
+        "awg1\tPUBKEY\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\toff\n"
+    )
     peers_off = parse_awg_dump(off_line)
     report_off = build_report(
         "cascade", audit_peers(peers_off, now_unix=1700000030), []
@@ -1104,7 +1108,6 @@ def test_load_real_dump_target_cli_key_override(monkeypatch, tmp_path) -> None:
 
 def test_run_check_encrypted_key_clean_error(monkeypatch, tmp_path) -> None:
     """_run_check returns 1 and prints clean SSH error for encrypted key."""
-    import io
     import sys
 
     import yaml
@@ -1175,7 +1178,6 @@ def test_run_check_encrypted_key_clean_error(monkeypatch, tmp_path) -> None:
 
 def test_run_check_server_all_names_failing_server(monkeypatch, tmp_path) -> None:
     """_run_check with --server all names the failing server in error."""
-    import io
     import sys
 
     import yaml
@@ -1545,7 +1547,6 @@ def test_describe_ssh_error_file_not_found(tmp_path) -> None:
 
 def test_run_check_missing_key_file_single_line(monkeypatch, tmp_path) -> None:
     """T6: _run_check with nonexistent key file → code 1, one missing-file line, no Traceback."""
-    import io
     import sys
 
     import yaml
@@ -1688,7 +1689,6 @@ def test_run_check_no_mid_out_roles_inactive(monkeypatch, tmp_path) -> None:
 
 def test_run_check_cli_key_missing_single_line(monkeypatch, tmp_path) -> None:
     """T8: explicit CLI key missing on disk → one missing-file line, code 1."""
-    import io
     import sys
 
     import yaml
@@ -2044,3 +2044,593 @@ def test_run_check_passive_link_ok(monkeypatch, tmp_path) -> None:
     output = result.output
     assert "keepalive_passive" in output
     assert "Result: OK" in output or '"status": "pass"' in output
+
+
+# ============================================================
+# Step 2 & 3: format_summary and format_verbose tests
+# ============================================================
+
+import io
+import sys
+
+
+def _make_report(
+    status: str,
+    links_data: list[dict] | None = None,
+    e2e_ok: bool = True,
+    passive: bool = False,
+    clients: list[dict] | None = None,
+) -> CheckReport:
+    """Helper to build a CheckReport for testing."""
+    from awg_cascade_ctl.check import LinkAudit
+
+    links = []
+    if links_data:
+        for d in links_data:
+            links.append(
+                LinkAudit(
+                    interface=d["interface"],
+                    peer_endpoint=d["peer_endpoint"],
+                    persistent_keepalive=d.get("persistent_keepalive"),
+                    latest_handshake_age_sec=d.get("latest_handshake_age_sec"),
+                    keepalive_ok=d.get("keepalive_ok", True),
+                    keepalive_passive=d.get("keepalive_passive", False),
+                    handshake_fresh=d.get("handshake_fresh", True),
+                    ok=d.get("ok", True),
+                    keepalive_status=d.get("keepalive_status", "OK"),
+                    keepalive_min=d.get("keepalive_min"),
+                    keepalive_max=d.get("keepalive_max"),
+                    role=d.get("role", "link"),
+                )
+            )
+    if clients:
+        for d in clients:
+            links.append(
+                LinkAudit(
+                    interface=d["interface"],
+                    peer_endpoint=d["peer_endpoint"],
+                    persistent_keepalive=d.get("persistent_keepalive"),
+                    latest_handshake_age_sec=d.get("latest_handshake_age_sec"),
+                    keepalive_ok=d.get("keepalive_ok", True),
+                    keepalive_passive=d.get("keepalive_passive", False),
+                    handshake_fresh=d.get("handshake_fresh", True),
+                    ok=d.get("ok", True),
+                    keepalive_status=d.get("keepalive_status", "OK"),
+                    keepalive_min=d.get("keepalive_min"),
+                    keepalive_max=d.get("keepalive_max"),
+                    role="client",
+                )
+            )
+    probes = []
+    if e2e_ok:
+        probes = [
+            E2EProbe(source="awg-in", url="http://example.com", ipv4="1.2.3.4", ok=True)
+        ]
+    return CheckReport(
+        schema_id="awg-ctl/check/v1",
+        schema_version="1.0",
+        generated_at="2024-01-01T00:00:00Z",
+        cascade="test-cascade",
+        links=links,
+        e2e_probes=probes,
+        ok=status == "pass",
+        status=status,
+        source="demo",
+    )
+
+
+def test_format_summary_pass_tty(monkeypatch):
+    """format_summary pass state with TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+            {
+                "interface": "awg1",
+                "peer_endpoint": "10.10.1.2:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    text = format_summary(report)
+    assert "🟢 PASS" in text
+    assert "2/2 ok" in text
+    assert "exit: 0" in text
+
+
+def test_format_summary_pass_non_tty(monkeypatch):
+    """format_summary pass state non-TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_summary(report)
+    assert "[PASS]" in text
+    assert "1/1 ok" in text
+    assert "exit: 0" in text
+    assert "🟢" not in text  # no emoji in non-TTY
+
+
+def test_format_summary_warn_tty(monkeypatch):
+    """format_summary warn state with TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "warning",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    text = format_summary(report)
+    assert "🟡 WARN" in text
+    assert "exit: 3" in text
+
+
+def test_format_summary_warn_non_tty(monkeypatch):
+    """format_summary warn state non-TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "warning",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_summary(report)
+    assert "[WARN]" in text
+    assert "exit: 3" in text
+
+
+def test_format_summary_fail_tty(monkeypatch):
+    """format_summary fail state with TTY and actionable lines."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "fail",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": False,
+                "handshake_fresh": False,
+                "ok": False,
+                "keepalive_status": "MISMATCH",
+            },
+            {
+                "interface": "awg1",
+                "peer_endpoint": "195.63.128.217:49022",
+                "keepalive_ok": True,
+                "handshake_fresh": False,
+                "ok": False,
+                "keepalive_status": "OK",
+            },
+            {
+                "interface": "awg2",
+                "peer_endpoint": "198.51.100.5:51820",
+                "keepalive_ok": False,
+                "handshake_fresh": True,
+                "ok": False,
+                "keepalive_status": "OFF",
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    text = format_summary(report)
+    assert "🔴 FAIL" in text
+    assert "exit: 1" in text
+    # Up to 3 actionable lines
+    action_lines = [l for l in text.splitlines() if l.startswith("   awg")]
+    assert len(action_lines) <= 3
+
+
+def test_format_summary_fail_non_tty(monkeypatch):
+    """format_summary fail state non-TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "fail",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": False,
+                "handshake_fresh": False,
+                "ok": False,
+                "keepalive_status": "MISMATCH",
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_summary(report)
+    assert "[FAIL]" in text
+    assert "exit: 1" in text
+    assert "🔴" not in text
+
+
+def test_format_summary_unknown(monkeypatch):
+    """format_summary unknown state."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = CheckReport(
+        schema_id="awg-ctl/check/v1",
+        schema_version="1.0",
+        generated_at="2024-01-01T00:00:00Z",
+        cascade="test",
+        links=[],
+        e2e_probes=[],
+        ok=False,
+        status="fail",
+        source="ssh",
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    text = format_summary(report, status="unknown")
+    assert "⚪ UNKNOWN" in text
+    assert "exit: 3" in text
+    assert "reason:" in text
+
+
+def test_format_summary_unknown_non_tty(monkeypatch):
+    """format_summary unknown state non-TTY."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = CheckReport(
+        schema_id="awg-ctl/check/v1",
+        schema_version="1.0",
+        generated_at="2024-01-01T00:00:00Z",
+        cascade="test",
+        links=[],
+        e2e_probes=[],
+        ok=False,
+        status="fail",
+        source="ssh",
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_summary(report, status="unknown")
+    assert "[UNKNOWN]" in text
+    assert "exit: 3" in text
+
+
+def test_format_summary_counted_only_excludes_clients(monkeypatch):
+    """Counter N/N ok excludes clients."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+        clients=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.9.9.5:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_summary(report)
+    assert "1/1 ok" in text  # only link counted, client excluded
+
+
+# ============================================================
+# format_verbose tests
+# ============================================================
+
+
+def test_format_verbose_level1(monkeypatch):
+    """format_verbose level=1 on mid fixture (links+clients+e2e+note)."""
+    from awg_cascade_ctl.check import format_verbose
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+            {
+                "interface": "awg1",
+                "peer_endpoint": "10.10.1.2:51820",
+                "keepalive_ok": False,
+                "handshake_fresh": True,
+                "ok": False,
+                "keepalive_status": "MISMATCH",
+            },
+        ],
+        clients=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.9.9.5:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+        e2e_ok=True,
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_verbose(report, 1)
+    assert "[PASS]" in text or "🟢 PASS" in text
+    assert "Links (counted)" in text
+    assert "Clients (not counted)" in text
+    assert "E2E" in text
+    assert "ℹ note:" in text
+    # Client should NOT appear in Links section
+    links_section = text.split("Links (counted)")[1].split("Clients (not counted)")[0]
+    assert "10.9.9.5" not in links_section
+
+
+def test_format_verbose_level2(monkeypatch):
+    """format_verbose level=2 includes introspect block."""
+    from awg_cascade_ctl.check import format_verbose
+
+    report = _make_report(
+        "fail",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": False,
+                "handshake_fresh": False,
+                "ok": False,
+                "keepalive_status": "MISMATCH",
+            },
+        ],
+        e2e_ok=False,
+    )
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    text = format_verbose(report, 2)
+    assert "── Introspect (debug) ──" in text
+    assert "file:line:" in text
+    assert "cmd: awg show all dump" in text
+
+
+# ============================================================
+# Triple status removed from default v2 output
+# ============================================================
+
+
+def test_default_output_no_triple_status():
+    """Default v2 output has NO overall: or Result: lines."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    import io as _io
+
+    _io.StringIO()
+    # Check that format_summary doesn't contain triple status
+    text = format_summary(report)
+    assert "overall:" not in text
+    assert "Result:" not in text
+    assert "status:" not in text
+
+
+# ============================================================
+# Clients in verbose under Clients (not counted), not in Links
+# ============================================================
+
+
+def test_clients_not_in_links_section():
+    """Clients appear under Clients (not counted), not Links (counted)."""
+    from awg_cascade_ctl.check import format_verbose
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+        clients=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.9.9.5:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    text = format_verbose(report, 1)
+    links_section = text.split("Links (counted)")[1].split("Clients (not counted)")[0]
+    assert "10.9.9.5" not in links_section
+    clients_section = text.split("Clients (not counted)")[1]
+    assert "10.9.9.5" in clients_section
+
+
+# ============================================================
+# --schema v1 and v2
+# ============================================================
+
+
+def test_schema_v1_old_text_plus_warning(tmp_path, monkeypatch):
+    """--schema v1: old text + stderr warning."""
+    import yaml
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {"host": "10.0.0.1", "username": "root"},
+                    "mid": {"host": "10.0.0.2", "username": "root"},
+                    "out": {"host": "10.0.0.3", "username": "root"},
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    mock_peers = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.0.0.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )
+    monkeypatch.setattr(cli_module, "load_real_dump", lambda **kw: mock_peers)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_module.app,
+        ["check", "--config", str(cfg_path), "--schema", "v1"],
+    )
+    assert result.exit_code == 0
+    assert "overall:" in result.output
+    assert "Result:" in result.output
+    assert (
+        "awg-ctl: --schema v1 is deprecated; v1 will be removed in 0.3."
+        in result.stderr
+    )
+
+
+def test_schema_v2_new_format():
+    """--schema v2: new светофор format."""
+    from awg_cascade_ctl.check import format_summary
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    import sys as _sys
+
+    old_isatty = _sys.stdout.isatty
+    try:
+        _sys.stdout.isatty = lambda: False
+        text = format_summary(report)
+        assert "[PASS]" in text
+        assert "overall:" not in text
+        assert "Result:" not in text
+    finally:
+        _sys.stdout.isatty = old_isatty
+
+
+# ============================================================
+# --json schema_version: 1.0
+# ============================================================
+
+
+def test_json_schema_version_1_0():
+    """--json outputs schema_version: 1.0 in envelope."""
+    import json
+
+    from awg_cascade_ctl.check import report_to_json
+
+    report = _make_report(
+        "pass",
+        links_data=[
+            {
+                "interface": "awg0",
+                "peer_endpoint": "10.0.0.1:51820",
+                "keepalive_ok": True,
+                "handshake_fresh": True,
+                "ok": True,
+            },
+        ],
+    )
+    data = json.loads(report_to_json(report))
+    assert data["schema_version"] == "1.0"
+    assert data["schema"] == "awg-ctl/check/v1"
+    assert data["ok"] is True
+
+
+# ============================================================
+# Exit codes unchanged
+# ============================================================
+
+
+def test_exit_codes_unchanged(monkeypatch):
+    """Exit codes unchanged for pass/warn/fail."""
+    from awg_cascade_ctl.errors import resolve_exit_code_from_outcome
+
+    # pass -> 0
+    assert resolve_exit_code_from_outcome("pass") == 0
+    # warn -> 3
+    assert resolve_exit_code_from_outcome("warning") == 3
+    # fail -> 1
+    assert resolve_exit_code_from_outcome("fail") == 1

@@ -31,7 +31,7 @@ def test_check_human(monkeypatch) -> None:
     monkeypatch.setattr("time.time", lambda: 1700000030)
     result = runner.invoke(app, ["check"])
     assert result.exit_code == 0
-    assert "overall: OK" in result.output
+    assert "[PASS]" in result.output
 
 
 def test_check_json(monkeypatch) -> None:
@@ -113,7 +113,7 @@ def test_menu_tty_runs_check(monkeypatch) -> None:
 
     result = runner.invoke(app, ["menu"])
     assert result.exit_code == 0
-    assert "overall: OK" in result.output
+    assert "[PASS]" in result.output
 
 
 def test_menu_phase2_stub_exits_64(monkeypatch) -> None:
@@ -173,7 +173,7 @@ def test_check_with_dump_file(tmp_path, monkeypatch) -> None:
     )
     result = runner.invoke(app, ["check", "--dump-file", str(dump_path)])
     assert result.exit_code == 0
-    assert "overall: OK" in result.output
+    assert "[PASS]" in result.output
 
 
 def test_check_with_dump_file_json(tmp_path, monkeypatch) -> None:
@@ -206,7 +206,7 @@ def test_check_with_config(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(app, ["check", "--config", str(tmp_path / "cascade.yaml")])
     assert result.exit_code == 0
-    assert "overall: OK" in result.output
+    assert "[PASS]" in result.output
 
 
 def test_menu_with_config(monkeypatch) -> None:
@@ -539,3 +539,312 @@ def test_check_command_server_flag_skips_pause(monkeypatch) -> None:
     assert called["value"] is False
     assert captured.get("config_path") == "/tmp/cascade.yaml"
     assert captured.get("server_target") == "mid"
+
+
+def test_now_no_tty_returns_default(monkeypatch) -> None:
+    """now without TTY falls back to default check output and exits."""
+    from awg_cascade_ctl import check as check_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr(check_module, "_is_tty", lambda: False)
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "[PASS]" in result.output
+    # No menu / overview output on the non-TTY fallback path.
+    assert "awg-ctl now" not in result.output
+
+
+def test_now_overall_aggregate(monkeypatch) -> None:
+    """now overview overall aggregate emoji: pass/warn/fail/no-data."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import CheckReport
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    def make_report(status: str) -> CheckReport:
+        return CheckReport(
+            schema_id="awg-ctl/check/v1",
+            schema_version="1.0",
+            generated_at="2026-01-01T00:00:00+00:00",
+            cascade="cascade-alpha",
+            links=[],
+            e2e_probes=[],
+            ok=status != "fail",
+            status=status,
+            source="demo",
+        )
+
+    def run_with_statuses(statuses: list[str]) -> "object":
+        it = iter(statuses)
+
+        def fake_build_report(*a, **kw):
+            return make_report(next(it))
+
+        monkeypatch.setattr(cli_module, "build_report", fake_build_report)
+        # Render twice (open server + esc) so the second overview runs with a
+        # populated reports dict; then quit.
+        mock_select.return_value.ask.side_effect = [
+            ("detail", 0),
+            "esc",
+            None,
+        ]
+        return runner.invoke(app, ["now"])
+
+    # all pass -> 🟢
+    result = run_with_statuses(["pass", "pass", "pass"])
+    assert result.exit_code == 0
+    assert "[🟢 Overall]" in result.output
+
+    # one warn -> 🟡
+    result = run_with_statuses(["pass", "warning", "pass"])
+    assert result.exit_code == 0
+    assert "[🟡 Overall]" in result.output
+
+    # one fail -> 🔴
+    result = run_with_statuses(["pass", "fail", "pass"])
+    assert result.exit_code == 0
+    assert "[🔴 Overall]" in result.output
+
+    # no data -> ⚪ (all fetch_report fail -> no pass/warn/fail statuses -> ⚪).
+    def make_unknown_report(*a, **kw):
+        return CheckReport.model_construct(
+            schema_id="awg-ctl/check/v1",
+            schema_version="1.0",
+            generated_at="2026-01-01T00:00:00+00:00",
+            cascade="cascade-alpha",
+            links=[],
+            e2e_probes=[],
+            ok=True,
+            status="unknown",
+            source="demo",
+        )
+
+    monkeypatch.setattr(cli_module, "build_report", make_unknown_report)
+    mock_select.return_value.ask.side_effect = None
+    mock_select.return_value.ask.return_value = None
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "[⚪ Overall]" in result.output
+
+
+def test_now_overall_first_render_pass(monkeypatch) -> None:
+    """Regression: first overview render (no Enter/Esc) must be 🟢, not ⚪.
+
+    Before the two-pass fix, overall was computed from the empty ``reports``
+    dict before any ``fetch_report`` call populated it, so the first frame
+    showed ⚪. After the fix, overall is computed from collected reports.
+    """
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import CheckReport
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    def make_report(status: str) -> CheckReport:
+        return CheckReport(
+            schema_id="awg-ctl/check/v1",
+            schema_version="1.0",
+            generated_at="2026-01-01T00:00:00+00:00",
+            cascade="cascade-alpha",
+            links=[],
+            e2e_probes=[],
+            ok=status != "fail",
+            status=status,
+            source="demo",
+        )
+
+    # All three servers → pass; first overview render must show 🟢.
+    it = iter(["pass", "pass", "pass"])
+
+    def fake_build_report(*a, **kw):
+        return make_report(next(it))
+
+    monkeypatch.setattr(cli_module, "build_report", fake_build_report)
+    # First overview render: no Enter/Esc, just quit.
+    mock_select.return_value.ask.side_effect = [None]
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "[🟢 Overall]" in result.output
+
+
+def test_now_enter_opens_server_level(monkeypatch) -> None:
+    """Enter on a server opens level 1 (Links/Clients/E2E); Esc returns."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.side_effect = [
+        ("detail", 0),  # Enter on server "in"
+        "esc",  # Esc back from level 1
+        None,  # Quit from level 0
+    ]
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "Links (counted)" in result.output
+    assert "Clients (not counted)" in result.output
+    assert "E2E" in result.output
+    # After Esc, control returns to the overview.
+    assert "awg-ctl now" in result.output
+    assert cli_module is not None  # imported for parity with other tests
+
+
+def test_now_v_opens_verbose(monkeypatch) -> None:
+    """v -> level 1 (Links/Clients/E2E/note); V -> level 2 (introspect)."""
+    from unittest import mock
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    # v -> level 1
+    mock_select.return_value.ask.side_effect = [
+        ("detail", 0),  # Enter on server "in"
+        "v",  # v (verbose level 1)
+        "esc",  # Esc back from level 1
+        None,  # Quit from level 0
+    ]
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "Links (counted)" in result.output
+    assert "Clients (not counted)" in result.output
+    assert "E2E" in result.output
+    assert "ℹ note" in result.output
+
+    # V -> level 2 (introspect raw/parse)
+    mock_select.return_value.ask.side_effect = [
+        ("detail", 0),  # Enter on server "in"
+        "V",  # V (debug level 2)
+        "esc",  # sub2: Esc back
+        "esc",  # Esc back from level 1
+        None,  # Quit from level 0
+    ]
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert "── Introspect (debug) ──" in result.output
+    assert "raw:" in result.output
+    assert "parse:" in result.output
+
+
+def test_now_j_opens_json(monkeypatch) -> None:
+    """j -> server JSON in pager; assert valid JSON with schema_version 1.0."""
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.side_effect = [
+        ("detail", 0),  # Enter on server "in"
+        "j",  # j (json)
+        None,  # Back from level 1
+        None,  # Quit from level 0
+    ]
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    mock_text = mock.MagicMock()
+    mock_text.return_value.ask.return_value = ""
+    monkeypatch.setattr(questionary, "text", mock_text)
+
+    result = runner.invoke(app, ["now"])
+    assert result.exit_code == 0
+    assert '"schema_version": "1.0"' in result.output
+    # Extract and validate the JSON object from the output.
+    start = result.output.find("{")
+    end = result.output.rfind("}") + 1
+    data = json.loads(result.output[start:end])
+    assert data["schema_version"] == "1.0"
+    assert data["schema"] == "awg-ctl/check/v1"
+
+
+def test_now_r_refresh_caches(monkeypatch) -> None:
+    """r refreshes checks; between navigations no new SSH load occurs."""
+    from unittest import mock
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import parse_awg_dump
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+    monkeypatch.setattr("typer.testing._NamedTextIOWrapper.isatty", lambda self: True)
+    monkeypatch.setattr("awg_cascade_ctl.check._is_tty", lambda: True)
+    monkeypatch.setattr("awg_cascade_ctl.cli.QUESTIONARY_AVAILABLE", True)
+
+    class FakeCheck:
+        keepalive_min = 5
+        keepalive_max = 180
+
+    class FakeNetwork:
+        ip_checker_url = "https://api.ipify.org"
+
+    class FakeServer:
+        host = "10.0.0.1"
+
+    class FakeCfg:
+        def __init__(self) -> None:
+            self.check = FakeCheck()
+            self.network = FakeNetwork()
+            self.servers = {
+                "in": FakeServer(),
+                "mid": FakeServer(),
+                "out": FakeServer(),
+            }
+
+    monkeypatch.setattr(
+        "awg_cascade_ctl.config.CascadeConfig.load", lambda p: FakeCfg()
+    )
+
+    mock_peer = parse_awg_dump(
+        "awg0\tPUB\tPSK\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
+    )[0]
+
+    calls = {"count": 0}
+
+    def fake_load_real_dump(**kw):
+        calls["count"] += 1
+        return [mock_peer]
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    mock_select = mock.MagicMock()
+    mock_select.return_value.ask.side_effect = [
+        ("refresh", -1),  # r: refresh (clears cache)
+        ("detail", 0),  # Enter on server "in" (cached)
+        "esc",  # Esc back from level 1
+        None,  # Quit from level 0
+    ]
+    monkeypatch.setattr(questionary, "select", mock_select)
+
+    result = runner.invoke(app, ["now", "--config", "/tmp/cascade.yaml"])
+    assert result.exit_code == 0
+
+    # Initial overview: 3 loads (in/mid/out).
+    # Refresh clears cache, next overview: 3 more loads.
+    # Enter + Esc + final overview: all cached -> no new loads.
+    assert calls["count"] == 6
