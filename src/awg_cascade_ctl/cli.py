@@ -17,9 +17,11 @@ from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
     KEEPALIVE_MAX,
     KEEPALIVE_MIN,
+    SSHDumpError,
     audit_peers,
     build_report,
     describe_check_plan,
+    describe_ssh_error,
     format_report_text,
     load_e2e_probes,
     load_real_dump,
@@ -305,14 +307,18 @@ def _run_check(
     link_hosts: frozenset[str] | None = None
     roles_active = False
     if config_path is not None and dump_file is None and cfg is not None:
-        link_hosts = frozenset(
-            {
-                cfg.servers["in"].host,
-                cfg.servers["mid"].host,
-                cfg.servers["out"].host,
-            }
+        link_hosts = (
+            frozenset(
+                {
+                    cfg.servers["in"].host,
+                    cfg.servers["mid"].host,
+                    cfg.servers["out"].host,
+                }
+            )
+            if "mid" in cfg.servers and "out" in cfg.servers
+            else None
         )
-        roles_active = True
+        roles_active = link_hosts is not None
 
     # Probe skip reason mirrors load_e2e_probes: it runs only for in/all with a config.
     if server_target not in ("in", "all"):
@@ -375,6 +381,14 @@ def _run_check(
                 typer.echo("\nAborted.", err=True)
                 raise typer.Exit(code=ExitCode.USAGE_ERROR.value)
         else:
+            if isinstance(exc, SSHDumpError):
+                typer.echo(
+                    describe_ssh_error(
+                        exc.exc, exc.server, exc.host, exc.port, exc.key_path
+                    ),
+                    err=True,
+                )
+                return ExitCode.CRITICAL.value
             raise
     except FileNotFoundError as exc:
         typer.echo(f"ERROR: config file not found: {exc}", err=True)
