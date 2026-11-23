@@ -326,6 +326,7 @@ class LinkAudit(BaseModel):
     persistent_keepalive: int | None = None
     latest_handshake_age_sec: int | None = None
     keepalive_ok: bool = False
+    keepalive_passive: bool = False
     handshake_fresh: bool = False
     ok: bool = False
     keepalive_status: Literal["OK", "OFF", "MISMATCH"] = "OK"
@@ -523,10 +524,14 @@ def audit_peers(
             keepalive_status = "OK" if keepalive_ok else "MISMATCH"
             keepalive_min_val = min_keepalive
             keepalive_max_val = max_keepalive
-        ok = keepalive_ok and handshake_fresh
         role: Literal["link", "client"] = (
             "link" if link_hosts is None else classify_peer(peer, link_hosts)
         )
+        keepalive_passive = False
+        if role == "link" and link_hosts is not None and kv == 0 and handshake_fresh:
+            keepalive_ok = True
+            keepalive_passive = True
+        ok = keepalive_ok and handshake_fresh
         audits.append(
             LinkAudit(
                 interface=peer.interface,
@@ -534,11 +539,12 @@ def audit_peers(
                 persistent_keepalive=peer.persistent_keepalive,
                 latest_handshake_age_sec=age,
                 keepalive_ok=keepalive_ok,
+                keepalive_passive=keepalive_passive,
+                handshake_fresh=handshake_fresh,
+                ok=ok,
                 keepalive_status=keepalive_status,
                 keepalive_min=keepalive_min_val,
                 keepalive_max=keepalive_max_val,
-                handshake_fresh=handshake_fresh,
-                ok=ok,
                 role=role,
             )
         )
@@ -627,8 +633,13 @@ def describe_check_plan(
         f"  Checks:      1) handshake is newer than {max_age_sec} s for every peer"
     )
     lines.append(
-        f"               2) keepalive is enabled and within {min_keepalive}..{max_keepalive} s"
+        f"               2) keepalive is within {min_keepalive}..{max_keepalive} s"
     )
+    if source == "ssh":
+        lines[-1] = (
+            f"               2) keepalive is within {min_keepalive}..{max_keepalive} s "
+            f"(OFF is accepted on the receiving end of a link while its handshake is fresh)"
+        )
     if probe_skipped_reason is not None:
         lines.append(
             f"               3) internet access: skipped ({probe_skipped_reason})"
@@ -654,6 +665,9 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
     overall_text = "OK" if report.ok else "FAILED"
     overall_color = "green" if report.ok else "red"
     lines.append(f"overall: {_paint(overall_text, overall_color, use_color)}")
+    result_text = "OK" if report.ok else "FAILED"
+    result_color = "green" if report.ok else "red"
+    lines.append(f"Result: {_paint(result_text, result_color, use_color)}")
     lines.append(f"source: {report.source}")
     lines.append(f"generated_at: {report.generated_at}")
     lines.append("")
@@ -665,19 +679,28 @@ def format_report_text(report: CheckReport, use_color: bool = False) -> str:
         lines.append(f"  {ok_count}/{link_count} ok")
         if link_count == 0:
             lines.append("no cascade links found")
+        passive_shown = False
         for link in report.links:
             ka_text = link.keepalive_status
             if link.keepalive_status == "MISMATCH":
                 ka_text = f"MISMATCH (got {link.persistent_keepalive}, expected {link.keepalive_min}..{link.keepalive_max})"
+            passive_marker = ""
+            if link.keepalive_passive:
+                passive_marker = " (receiving end)"
+                passive_shown = True
             link_line = (
                 f"  {link.interface} -> {link.peer_endpoint}: "
-                f"keepalive={ka_text}, "
+                f"keepalive={ka_text}{passive_marker}, "
                 f"handshake={'fresh' if link.handshake_fresh else 'STALE'}, "
                 f"ok={'yes' if link.ok else 'no'}"
             )
             if link.role == "client":
                 link_line += " [client, not counted]"
             lines.append(link_line)
+        if passive_shown:
+            lines.append(
+                "  note: keepalive=OFF on a link with a fresh handshake is normal on the receiving end (the other server sends the keepalives)."
+            )
     else:
         lines.append("Links: 0 links")
 

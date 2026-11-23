@@ -1753,3 +1753,294 @@ def test_run_check_cli_key_missing_single_line(monkeypatch, tmp_path) -> None:
     assert str(missing_key) in missing_lines[0]
     assert "Traceback" not in stderr_output
     assert "config file not found" not in stderr_output
+
+
+def test_audit_peers_passive_keepalive_fresh() -> None:
+    """T1: link, link_hosts, keepalive 0, fresh handshake -> keepalive_ok True, passive True, ok True."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    assert len(audits) == 1
+    assert audits[0].role == "link"
+    assert audits[0].persistent_keepalive == 0
+    assert audits[0].keepalive_status == "OFF"
+    assert audits[0].handshake_fresh is True
+    assert audits[0].keepalive_ok is True
+    assert audits[0].keepalive_passive is True
+    assert audits[0].ok is True
+
+
+def test_audit_peers_passive_keepalive_stale() -> None:
+    """T2: link, keepalive 0, handshake 1000s old -> ok False, passive False."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700001030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    assert len(audits) == 1
+    assert audits[0].keepalive_passive is False
+    assert audits[0].handshake_fresh is False
+    assert audits[0].ok is False
+
+
+def test_audit_peers_passive_no_link_hosts_strict() -> None:
+    """T3: link_hosts=None -> strict evaluation, keepalive 0 -> ok False, passive False."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=None,
+    )
+    assert len(audits) == 1
+    assert audits[0].keepalive_passive is False
+    assert audits[0].keepalive_ok is False
+    assert audits[0].ok is False
+
+
+def test_audit_peers_keepalive_34_mismatch_passive_false() -> None:
+    """T4: keepalive 34 -> MISMATCH, ok False, passive False."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t34\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    assert len(audits) == 1
+    assert audits[0].keepalive_status == "MISMATCH"
+    assert audits[0].keepalive_ok is False
+    assert audits[0].keepalive_passive is False
+    assert audits[0].ok is False
+
+
+def test_audit_peers_client_keepalive_0_passive_false() -> None:
+    """T5: client keepalive 0 -> role client, keepalive_passive False."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t198.51.100.5:51820\t203.0.113.2/32\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    assert len(audits) == 1
+    assert audits[0].role == "client"
+    assert audits[0].keepalive_passive is False
+
+
+def test_build_report_passive_link_ok() -> None:
+    """T6: roles_active=True, passive link + offline client -> ok True, pass."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+        + "awg1\tPUBKEY2\tPSK2\t198.51.100.5:51820\t203.0.113.2/32\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    assert report.ok is True
+    assert report.status == "pass"
+
+
+def test_format_report_text_passive_receiving_end_note() -> None:
+    """T7: text shows "(receiving end)" and note line for passive link."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "(receiving end)" in text
+    assert "keepalive=OFF (receiving end)" in text
+    assert "note: keepalive=OFF on a link with a fresh handshake" in text
+
+
+def test_format_report_text_no_passive_no_note() -> None:
+    """T7: no passive links -> no "(receiving end)" and no note line."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t33\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "(receiving end)" not in text
+    assert "note:" not in text
+
+
+def test_result_ok_passive_link() -> None:
+    """T8: Result OK for two links, one passive."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+        + "awg1\tPUBKEY2\tPSK2\t203.0.113.2:51821\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t33\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1", "203.0.113.2"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "Result: OK" in text
+    assert text.count("ok=yes") == 2
+
+
+def test_result_failed_passive_stale_handshake() -> None:
+    """T9: passive link + stale handshake -> FAILED with both reasons."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700001030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    text = format_report_text(report, use_color=False)
+    assert "Result: FAILED" in text
+    assert "keepalive is off" in text.lower() or "keepalive" in text.lower()
+    assert "no fresh handshake" in text.lower() or "handshake" in text.lower()
+
+
+def test_describe_check_plan_ssh_keepalive_text() -> None:
+    """T10: ssh source new keepalive text with receiving end note."""
+    text = describe_check_plan(
+        source="ssh",
+        server_target="in",
+        min_keepalive=1,
+        max_keepalive=33,
+        probe_url="https://example.com",
+        probe_skipped_reason=None,
+    )
+    lines = text.splitlines()
+    keepalive_line = [l for l in lines if l.startswith("               2) keepalive")]
+    assert len(keepalive_line) == 1
+    assert "OFF is accepted on the receiving end" in keepalive_line[0]
+
+
+def test_describe_check_plan_demo_dumpfile_keepalive_old() -> None:
+    """T10: demo and dump_file keep old keepalive text."""
+    for source, kw in [
+        ("demo", {}),
+        ("dump_file", {"dump_file": "/tmp/dump.txt"}),
+    ]:
+        text = describe_check_plan(
+            source=source,
+            server_target="in",
+            min_keepalive=1,
+            max_keepalive=33,
+            probe_url="https://example.com",
+            probe_skipped_reason=None,
+            **kw,
+        )
+        lines = text.splitlines()
+        keepalive_line = [
+            l for l in lines if l.startswith("               2) keepalive")
+        ]
+        assert len(keepalive_line) == 1
+        assert "OFF is accepted" not in keepalive_line[0]
+
+
+def test_json_contains_keepalive_passive() -> None:
+    """T11: JSON output contains keepalive_passive field."""
+    peers = parse_awg_dump(
+        "awg1\tPUBKEY\tPSK\t203.0.113.1:51820\t0.0.0.0/0,::/0\t1700000000\t1000\t2000\t0\n"
+    )
+    audits = audit_peers(
+        peers,
+        now_unix=1700000030,
+        link_hosts=frozenset({"203.0.113.1"}),
+    )
+    report = build_report("cascade-alpha", audits, [], roles_active=True)
+    data = json.loads(report_to_json(report))
+    assert data["links"][0]["keepalive_passive"] is True
+
+
+def test_schema_contains_keepalive_passive() -> None:
+    """T11: schema --json contains keepalive_passive."""
+    schema = report_schema()
+    link_audit_props = schema["$defs"]["LinkAudit"]["properties"]
+    assert "keepalive_passive" in link_audit_props
+    assert link_audit_props["keepalive_passive"]["type"] == "boolean"
+
+
+def test_run_check_passive_link_ok(monkeypatch, tmp_path) -> None:
+    """T12: _run_check via CliRunner, mocked load_real_dump, passive link -> code 0, Result: OK."""
+    import yaml
+    from typer.testing import CliRunner
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.check import RawPeer
+
+    monkeypatch.setattr("time.time", lambda: 1700000030)
+
+    hosts = ["203.0.113.10", "203.0.113.11", "203.0.113.12"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {"host": hosts[0], "username": "root"},
+                    "mid": {"host": hosts[1], "username": "root"},
+                    "out": {"host": hosts[2], "username": "root"},
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    link_peer = RawPeer(
+        interface="awg1",
+        peer_endpoint=f"{hosts[0]}:51820",
+        latest_handshake_unix=1700000000,
+        persistent_keepalive=0,
+        allowed_ips="0.0.0.0/0,::/0",
+    )
+
+    def fake_load_real_dump(**kw):
+        return [link_peer]
+
+    monkeypatch.setattr(cli_module, "load_real_dump", fake_load_real_dump)
+    monkeypatch.setattr(cli_module, "load_e2e_probes", lambda **kw: [])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_module.app,
+        ["check", "--config", str(cfg_path), "--server", "in", "--json"],
+    )
+    assert result.exit_code == 0
+    output = result.output
+    assert "keepalive_passive" in output
+    assert "Result: OK" in output or '"status": "pass"' in output
