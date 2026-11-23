@@ -1,6 +1,7 @@
 """Tests for check module: dump parsing, audit, report building, schema."""
 
 import json
+from unittest import mock
 
 from awg_cascade_ctl.check import (
     HANDSHAKE_MAX_AGE_SEC,
@@ -900,3 +901,345 @@ def test_run_check_wires_link_hosts_and_roles_active(monkeypatch, tmp_path) -> N
     assert code == 0
     assert captured["audit_peers"]["link_hosts"] is None
     assert captured["build_report"]["roles_active"] is False
+
+
+def test_describe_ssh_error_password_required(tmp_path) -> None:
+    """describe_ssh_error returns single-line for encrypted key."""
+    from paramiko import PasswordRequiredException
+
+    from awg_cascade_ctl.check import describe_ssh_error
+
+    exc = PasswordRequiredException("Private key file is encrypted")
+    msg = describe_ssh_error(exc, "mid", "198.51.100.10", 22, "/tmp/key")
+    assert "SSH key for server mid is encrypted" in msg
+    assert "/tmp/key" in msg
+    assert "Use --ask-pass" in msg
+    assert "Traceback" not in msg
+    assert "\n" not in msg
+
+
+def test_describe_ssh_error_auth_failed(tmp_path) -> None:
+    """describe_ssh_error returns single-line for auth failure."""
+    from paramiko import AuthenticationException
+
+    from awg_cascade_ctl.check import describe_ssh_error
+
+    exc = AuthenticationException("Permission denied")
+    msg = describe_ssh_error(exc, "mid", "198.51.100.10", 22, "/tmp/key")
+    assert "SSH authentication failed for server mid" in msg
+    assert "198.51.100.10" in msg
+    assert "/tmp/key" in msg
+    assert "Traceback" not in msg
+    assert "\n" not in msg
+
+
+def test_describe_ssh_error_network_error(tmp_path) -> None:
+    """describe_ssh_error returns single-line for network error."""
+    from awg_cascade_ctl.check import describe_ssh_error
+
+    exc = OSError("Connection refused")
+    msg = describe_ssh_error(exc, "mid", "198.51.100.10", 22, "/tmp/key")
+    assert "Cannot connect to server mid" in msg
+    assert "198.51.100.10:22" in msg
+    assert "Connection refused" in msg
+    assert "Traceback" not in msg
+    assert "\n" not in msg
+
+
+def test_describe_ssh_error_fallback(tmp_path) -> None:
+    """describe_ssh_error returns single-line for unknown error."""
+    from awg_cascade_ctl.check import describe_ssh_error
+
+    exc = ValueError("boom")
+    msg = describe_ssh_error(exc, "mid", "198.51.100.10", 22, None)
+    assert "SSH error for server mid" in msg
+    assert "198.51.100.10" in msg
+    assert "boom" in msg
+    assert "Traceback" not in msg
+    assert "\n" not in msg
+
+
+def test_load_real_dump_target_per_server_key(monkeypatch, tmp_path) -> None:
+    """load_real_dump_target uses the target server's ssh_key_path."""
+    import yaml
+
+    from awg_cascade_ctl import check as check_module
+    from awg_cascade_ctl.config import CascadeConfig
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    hosts = ["203.0.113.10", "203.0.113.11", "203.0.113.12"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {
+                        "host": hosts[0],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_in_key",
+                    },
+                    "mid": {
+                        "host": hosts[1],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_mid_key",
+                    },
+                    "out": {
+                        "host": hosts[2],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_out_key",
+                    },
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    captured: dict = {}
+
+    def fake_transport(**kwargs):
+        captured[kwargs.get("host")] = kwargs.get("key_path")
+        mock_transport = mock.MagicMock(spec=SSHTransport)
+        mock_transport.run_awg_dump.return_value = []
+        return mock_transport
+
+    monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
+    cfg = CascadeConfig.load(cfg_path)
+
+    check_module.load_real_dump_target(cfg, "in")
+    check_module.load_real_dump_target(cfg, "mid")
+    check_module.load_real_dump_target(cfg, "out")
+
+    assert captured.get(cfg.servers["in"].host) == "/tmp/fake_in_key"
+    assert captured.get(cfg.servers["mid"].host) == "/tmp/fake_mid_key"
+    assert captured.get(cfg.servers["out"].host) == "/tmp/fake_out_key"
+
+
+def test_load_real_dump_target_cli_key_override(monkeypatch, tmp_path) -> None:
+    """load_real_dump_target respects CLI --key-path override."""
+    import yaml
+
+    from awg_cascade_ctl import check as check_module
+    from awg_cascade_ctl.config import CascadeConfig
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    hosts = ["203.0.113.10", "203.0.113.11", "203.0.113.12"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {
+                        "host": hosts[0],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_in_key",
+                    },
+                    "mid": {
+                        "host": hosts[1],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_mid_key",
+                    },
+                    "out": {
+                        "host": hosts[2],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_out_key",
+                    },
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    captured_key: dict = {}
+
+    def fake_transport(**kwargs):
+        captured_key["key_path"] = kwargs.get("key_path")
+        mock_transport = mock.MagicMock(spec=SSHTransport)
+        mock_transport.run_awg_dump.return_value = []
+        return mock_transport
+
+    monkeypatch.setattr("awg_cascade_ctl.ssh.SSHTransport", fake_transport)
+    cfg = CascadeConfig.load(cfg_path)
+
+    check_module.load_real_dump_target(cfg, "mid", key_path="/cli/override_key")
+
+    assert captured_key["key_path"] == "/cli/override_key"
+
+
+def test_run_check_encrypted_key_clean_error(monkeypatch, tmp_path) -> None:
+    """_run_check returns 1 and prints clean SSH error for encrypted key."""
+    import io
+    import sys
+
+    import yaml
+    from paramiko import PasswordRequiredException
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    hosts = ["203.0.113.10"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {
+                        "host": hosts[0],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/fake_key",
+                    },
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    def raising_connect(self):
+        raise PasswordRequiredException("Private key file is encrypted")
+
+    monkeypatch.setattr(SSHTransport, "connect", raising_connect)
+
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+
+    try:
+        code = cli_module._run_check(
+            json_output=True,
+            config_path=str(cfg_path),
+            server_target="in",
+        )
+        stderr_output = sys.stderr.getvalue()
+    finally:
+        sys.stderr = old_stderr
+
+    assert code == 1
+    error_lines = [
+        ln
+        for ln in stderr_output.splitlines()
+        if "SSH key for server in is encrypted" in ln
+    ]
+    assert len(error_lines) == 1
+    assert "/tmp/fake_key" in error_lines[0]
+    assert "Traceback" not in stderr_output
+
+
+def test_run_check_server_all_names_failing_server(monkeypatch, tmp_path) -> None:
+    """_run_check with --server all names the failing server in error."""
+    import io
+    import sys
+
+    import yaml
+    from paramiko import PasswordRequiredException
+
+    from awg_cascade_ctl import cli as cli_module
+    from awg_cascade_ctl.ssh import SSHTransport
+
+    hosts = ["203.0.113.10", "198.51.100.11", "203.0.113.12"]
+    cfg_path = tmp_path / "cascade.yaml"
+    cfg_path.write_text(
+        yaml.dump(
+            {
+                "servers": {
+                    "in": {
+                        "host": hosts[0],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/in_key",
+                    },
+                    "mid": {
+                        "host": hosts[1],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/mid_key",
+                    },
+                    "out": {
+                        "host": hosts[2],
+                        "username": "root",
+                        "ssh_key_path": "/tmp/out_key",
+                    },
+                },
+                "network": {
+                    "client_subnet": "10.9.9.0/24",
+                    "link1_subnet": "10.10.1.0/30",
+                    "link2_subnet": "10.10.2.0/30",
+                    "dns": ["1.1.1.1"],
+                    "ip_checker_url": "http://example.com",
+                },
+                "ports": {
+                    "client_in": 51820,
+                    "link1": 51821,
+                    "link2": 51822,
+                    "mobile": None,
+                },
+            }
+        )
+    )
+
+    # in -> success (no peers), mid -> raises PasswordRequiredException
+    call_count = {"value": 0}
+
+    def raising_connect(self):
+        call_count["value"] += 1
+        if call_count["value"] == 2:
+            raise PasswordRequiredException("Private key file is encrypted")
+        return mock.MagicMock()
+
+    monkeypatch.setattr(SSHTransport, "connect", raising_connect)
+
+    def fake_run_awg_dump(self):
+        if self.host == hosts[0]:
+            return []
+        raise RuntimeError("SSH dump failed: x")
+
+    monkeypatch.setattr(SSHTransport, "run_awg_dump", fake_run_awg_dump)
+
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+
+    try:
+        code = cli_module._run_check(
+            json_output=True,
+            config_path=str(cfg_path),
+            server_target="all",
+        )
+        stderr_output = sys.stderr.getvalue()
+    finally:
+        sys.stderr = old_stderr
+
+    assert code == 1
+    assert "server mid" in stderr_output.lower()
+    assert "encrypted" in stderr_output.lower()
+    assert "Traceback" not in stderr_output

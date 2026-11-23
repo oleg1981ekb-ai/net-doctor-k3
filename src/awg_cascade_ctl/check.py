@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from paramiko import AuthenticationException, PasswordRequiredException
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
@@ -39,11 +42,98 @@ def _paint(text: str, color: str, use_color: bool) -> str:
     return f"{_ANSI[color]}{text}{_ANSI['reset']}"
 
 
+class SSHDumpError(RuntimeError):
+    """Raised when fetching an AWG dump over SSH fails.
+
+    Carries structured metadata so callers can emit a clean one-line
+    error instead of a full traceback. Subclasses ``RuntimeError`` so the
+    existing ``--ask-pass`` handling keeps working; ``str(exc)`` mirrors the
+    wrapped error ``str`` (e.g. it still contains ``"encrypted"``).
+    """
+
+    def __init__(
+        self,
+        *,
+        server: str,
+        host: str,
+        port: int,
+        key_path: str | None,
+        exc: BaseException,
+    ) -> None:
+        super().__init__(str(exc))
+        self.server = server
+        self.host = host
+        self.port = port
+        self.key_path = key_path
+        self.exc = exc
+
+
+def describe_ssh_error(
+    exc: BaseException,
+    server_name: str,
+    host: str,
+    port: int,
+    key_path: str | None,
+) -> str:
+    """Return a single-line English error string for an SSH failure.
+
+    The message contains no traceback, no passphrase, and no key material.
+    Walks the ``__cause__`` chain so wrapped ``RuntimeError`` messages
+    (e.g. from ``run_awg_dump``) are reduced to their underlying cause.
+    """
+    seen: set[int] = set()
+    current = exc
+    while id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, PasswordRequiredException):
+            kp = key_path if key_path else "ssh-agent / auto-detect"
+            return (
+                f"SSH key for server {server_name} is encrypted: {kp}. "
+                "Use --ask-pass, set SSH_KEY_PASSPHRASE, or add the key to ssh-agent."
+            )
+        if isinstance(current, AuthenticationException):
+            kp = key_path if key_path else "ssh-agent / auto-detect"
+            return f"SSH authentication failed for server {server_name} ({host}) with key {kp}."
+        if isinstance(
+            current,
+            (
+                OSError,
+                socket.timeout,
+                TimeoutError,
+            ),
+        ):
+            return f"Cannot connect to server {server_name} ({host}:{port}): {current}"
+        if current.__cause__ is not None:
+            current = current.__cause__
+            continue
+        break
+    return f"SSH error for server {server_name} ({host}): {exc}"
+
+
 def _demo_dump() -> str:
     """Return the hardcoded demo AWG dump (used when no real source is available)."""
     return (
         "awg0\tpub1\tpsk1\t10.10.1.1:51820\t10.10.1.0/30\t1700000000\t1000\t2000\t25\n"
     )
+
+
+def _key_path_from_config(
+    cfg: CascadeConfig,
+    target: Literal["in", "mid", "out"],
+    explicit_key_path: str | None,
+) -> str | None:
+    """Return the SSH key path for *target*.
+
+    Priority (explicit CLI always wins):
+    1. ``explicit_key_path`` – from CLI ``--key-path`` (overrides all).
+    2. ``server.ssh_key_path`` – from ``cascade.yaml`` for the target server.
+    3. ``None`` – let SSHTransport auto‑detect (agent / defaults).
+    """
+    if explicit_key_path is not None and isinstance(explicit_key_path, str):
+        return os.path.expanduser(explicit_key_path)
+    if target in cfg.servers and cfg.servers[target].ssh_key_path is not None:
+        return os.path.expanduser(cfg.servers[target].ssh_key_path)
+    return None
 
 
 def load_real_dump_target(
@@ -60,18 +150,20 @@ def load_real_dump_target(
         key_path: Optional explicit SSH key path (CLI override).
         key_passphrase: Optional passphrase for encrypted key.
     """
-    from awg_cascade_ctl.ssh import SSHTransport, resolve_ssh_key_from_config
+    from awg_cascade_ctl.ssh import SSHTransport
 
     server = cfg.servers[target]
-    # Resolve key: explicit CLI → config → agent → auto-detect
-    resolved_key, needs_passphrase = resolve_ssh_key_from_config(
-        cfg, explicit_key_path=key_path
-    )
+    # Resolve key: explicit CLI → config for target server → auto-detect
+    resolved_key = _key_path_from_config(cfg, target, key_path)
+
     # If passphrase provided via CLI/env, use it; otherwise rely on agent
     effective_passphrase = key_passphrase if key_passphrase is not None else None
 
     # Emit key status for user-facing diagnostics
-    if resolved_key:
+    if resolved_key is not None:
+        from awg_cascade_ctl.ssh import _key_needs_passphrase
+
+        needs_passphrase = _key_needs_passphrase(resolved_key)
         status = "encrypted" if needs_passphrase else "unencrypted"
         print(f"* SSH key: {resolved_key} ({status})", file=sys.stderr)
     else:
@@ -88,7 +180,34 @@ def load_real_dump_target(
     )
     try:
         transport.connect()
-        return transport.run_awg_dump()
+        try:
+            return transport.run_awg_dump()
+        except RuntimeError as exc:
+            raise SSHDumpError(
+                server=target,
+                host=server.host,
+                port=server.port,
+                key_path=resolved_key,
+                exc=exc,
+            ) from exc
+    except SSHDumpError:
+        raise
+    except RuntimeError as exc:
+        raise SSHDumpError(
+            server=target,
+            host=server.host,
+            port=server.port,
+            key_path=resolved_key,
+            exc=exc,
+        ) from exc
+    except Exception as exc:
+        raise SSHDumpError(
+            server=target,
+            host=server.host,
+            port=server.port,
+            key_path=resolved_key,
+            exc=exc,
+        ) from exc
     finally:
         transport.close()
 
